@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import json
 import re
+import shlex
 import signal
 import sys
 import time
@@ -26,6 +28,9 @@ ATTACHMENTS_BASE_DIR = ".slackclaw_attachments"
 MAX_IMAGE_FILES_PER_TASK = 4
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_SHELL_SPLIT_RE = re.compile(r"(?:&&|\|\||;|\|)")
+_SHELL_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+_SHELL_WRAPPER_CMDS = {"sudo", "command", "time", "nohup"}
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -45,6 +50,50 @@ def _event(name: str, **fields) -> None:
 
 def _checkpoint_key(channel_id: str) -> str:
     return f"{CHECKPOINT_KEY_PREFIX}:{channel_id}"
+
+
+def _extract_shell_command_names(command: str) -> list[str]:
+    commands: list[str] = []
+    for segment in _SHELL_SPLIT_RE.split(command):
+        raw = segment.strip()
+        if not raw:
+            continue
+        try:
+            parts = shlex.split(raw)
+        except ValueError:
+            parts = raw.split()
+        if not parts:
+            continue
+
+        index = 0
+        while index < len(parts) and _SHELL_ASSIGNMENT_RE.match(parts[index]):
+            index += 1
+        if index >= len(parts):
+            continue
+
+        cmd = parts[index]
+        if cmd in _SHELL_WRAPPER_CMDS and index + 1 < len(parts):
+            index += 1
+            while index < len(parts) and _SHELL_ASSIGNMENT_RE.match(parts[index]):
+                index += 1
+            if index >= len(parts):
+                continue
+            cmd = parts[index]
+
+        commands.append(Path(cmd).name.lower())
+    return commands
+
+
+def _disallowed_shell_commands(command: str, allowlist: tuple[str, ...]) -> list[str]:
+    allow = {item.lower() for item in allowlist}
+    seen: set[str] = set()
+    disallowed: list[str] = []
+    for cmd in _extract_shell_command_names(command):
+        if cmd in allow or cmd in seen:
+            continue
+        seen.add(cmd)
+        disallowed.append(cmd)
+    return disallowed
 
 
 def _sanitize_filename(name: str, fallback: str) -> str:
@@ -177,12 +226,14 @@ def _task_from_payload(task_id: str, payload: dict) -> TaskSpec | None:
         return None
 
 
-def _approval_plan_text(config: AppConfig, task: TaskSpec) -> str:
+def _approval_plan_text(config: AppConfig, task: TaskSpec, *, reason: str | None = None) -> str:
     lines = [
         f"SlackClaw plan for task `{task.task_id}`",
         f"command: `{task.command_text}`",
         f"lock: `{task.lock_key}`",
     ]
+    if reason:
+        lines.append(f"reason: {reason}")
     if task.image_paths:
         lines.append(f"images: {len(task.image_paths)} downloaded attachment(s)")
     lines.append(
@@ -195,11 +246,12 @@ def _request_reaction_approval(
     config: AppConfig,
     *,
     task: TaskSpec,
+    reason: str | None,
     store: StateStore,
     client: SlackWebClient,
     reporter: Reporter,
 ) -> bool:
-    plan_text = _approval_plan_text(config, task)
+    plan_text = _approval_plan_text(config, task, reason=reason)
     try:
         posted = client.chat_post_message(
             channel_id=task.channel_id,
@@ -278,9 +330,23 @@ def _process_command_message(
     if task.image_paths:
         _event("task_images_prepared", task_id=task.task_id, image_count=len(task.image_paths))
 
-    if config.approval_mode == "reaction":
+    approval_reason: str | None = None
+    if config.approval_mode == "reaction" and task.command_text.startswith("sh:"):
+        shell_command = task.command_text[3:].strip()
+        disallowed = _disallowed_shell_commands(shell_command, config.shell_allowlist)
+        if disallowed:
+            approval_reason = "non-allowlisted shell command(s): " + ", ".join(disallowed)
+
+    if approval_reason is not None:
         store.upsert_task(task.task_id, TaskStatus.WAITING_APPROVAL, payload=_task_payload(task))
-        _request_reaction_approval(config, task=task, store=store, client=client, reporter=reporter)
+        _request_reaction_approval(
+            config,
+            task=task,
+            reason=approval_reason,
+            store=store,
+            client=client,
+            reporter=reporter,
+        )
         return 0
 
     store.upsert_task(task.task_id, TaskStatus.PENDING, payload=_task_payload(task))
@@ -354,21 +420,72 @@ def _process_reaction_event(
     return 0
 
 
+def _execute_task_in_worker(
+    task: TaskSpec,
+    state_db_path: str,
+    dry_run: bool,
+    timeout_seconds: int,
+    response_format_instruction: str,
+) -> TaskExecutionResult:
+    worker_store = StateStore(state_db_path)
+    try:
+        executor = TaskExecutor(
+            dry_run=dry_run,
+            timeout_seconds=timeout_seconds,
+            response_format_instruction=response_format_instruction,
+        )
+        return executor.execute(task, store=worker_store)
+    finally:
+        worker_store.close()
+
+
+def _finish_task(
+    *,
+    task: TaskSpec,
+    result: TaskExecutionResult,
+    store: StateStore,
+    reporter: Reporter,
+) -> None:
+    store.update_task_status(task.task_id, result.status)
+    try:
+        reporter.report(task, result)
+        report_ok = True
+    except Exception as exc:
+        report_ok = False
+        _event("report_failed", task_id=task.task_id, error=str(exc))
+
+    _event(
+        "task_finished",
+        task_id=task.task_id,
+        status=result.status.value,
+        report_ok=report_ok,
+        summary=result.summary,
+    )
+
+
 def _drain_queue(
     queue: TaskQueue,
     *,
+    config: AppConfig,
     store: StateStore,
     executor: TaskExecutor,
     reporter: Reporter,
+    process_pool: cf.ProcessPoolExecutor | None,
 ) -> int:
     handled = 0
+    deferred: list[TaskSpec] = []
+    in_flight: list[tuple[TaskSpec, cf.Future[TaskExecutionResult]]] = []
+
     while True:
         task = queue.dequeue()
         if task is None:
-            return handled
+            break
+
+        if not store.transition_task_status(task.task_id, TaskStatus.PENDING, TaskStatus.RUNNING):
+            # Another process may have already claimed/finished this task.
+            continue
 
         handled += 1
-        store.update_task_status(task.task_id, TaskStatus.RUNNING)
         _event(
             "task_started",
             task_id=task.task_id,
@@ -379,56 +496,59 @@ def _drain_queue(
         )
 
         if not store.acquire_execution_lock(task.lock_key, task.task_id):
-            result = TaskExecutionResult(
-                status=TaskStatus.FAILED,
-                summary=f"execution lock busy: {task.lock_key}",
-                details="task skipped because another execution holds the same lock",
-            )
-            store.update_task_status(task.task_id, result.status)
-            try:
-                reporter.report(task, result)
-                report_ok = True
-            except Exception as exc:
-                report_ok = False
-                _event("report_failed", task_id=task.task_id, error=str(exc))
-
+            # Keep pending for a retry in a later cycle instead of failing fast.
+            store.update_task_status(task.task_id, TaskStatus.PENDING)
+            deferred.append(task)
             _event(
-                "task_finished",
+                "task_deferred_lock_busy",
                 task_id=task.task_id,
-                status=result.status.value,
-                report_ok=report_ok,
-                summary=result.summary,
+                lock_key=task.lock_key,
             )
             continue
 
+        if process_pool is None:
+            try:
+                try:
+                    result = executor.execute(task, store=store)
+                except Exception as exc:  # pragma: no cover - defensive boundary
+                    result = TaskExecutionResult(
+                        status=TaskStatus.FAILED,
+                        summary=f"executor raised error: {exc}",
+                        details=traceback.format_exc(limit=5),
+                    )
+
+                _finish_task(task=task, result=result, store=store, reporter=reporter)
+            finally:
+                store.release_execution_lock(task.lock_key, task.task_id)
+            continue
+
+        future = process_pool.submit(
+            _execute_task_in_worker,
+            task,
+            config.state_db_path,
+            config.dry_run,
+            config.exec_timeout_seconds,
+            config.agent_response_instruction,
+        )
+        in_flight.append((task, future))
+
+    for task, future in in_flight:
         try:
             try:
-                result = executor.execute(task, store=store)
-            except Exception as exc:  # pragma: no cover - defensive boundary
+                result = future.result()
+            except Exception as exc:  # pragma: no cover - process-pool failures depend on env
                 result = TaskExecutionResult(
                     status=TaskStatus.FAILED,
-                    summary=f"executor raised error: {exc}",
-                    details=traceback.format_exc(limit=5),
+                    summary=f"worker process execution failed: {exc}",
+                    details="task execution did not return a valid result",
                 )
-
-            store.update_task_status(task.task_id, result.status)
-
-            try:
-                reporter.report(task, result)
-                report_ok = True
-            except Exception as exc:
-                report_ok = False
-                _event("report_failed", task_id=task.task_id, error=str(exc))
-
-            _event(
-                "task_finished",
-                task_id=task.task_id,
-                status=result.status.value,
-                report_ok=report_ok,
-                summary=result.summary,
-            )
+            _finish_task(task=task, result=result, store=store, reporter=reporter)
         finally:
             store.release_execution_lock(task.lock_key, task.task_id)
+
+    for task in deferred:
+        queue.enqueue(task)
+    return handled
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -480,6 +600,9 @@ def run(argv: list[str] | None = None) -> int:
         timeout_seconds=config.exec_timeout_seconds,
         response_format_instruction=config.agent_response_instruction,
     )
+    process_pool: cf.ProcessPoolExecutor | None = None
+    if config.worker_processes > 1:
+        process_pool = cf.ProcessPoolExecutor(max_workers=config.worker_processes)
     reporter = Reporter(
         report_channel_id=config.report_channel_id,
         client=client,
@@ -499,6 +622,8 @@ def run(argv: list[str] | None = None) -> int:
         trigger_mode=config.trigger_mode,
         run_mode=config.run_mode,
         approval_mode=config.approval_mode,
+        worker_processes=config.worker_processes,
+        shell_allowlist_count=len(config.shell_allowlist),
         approve_reaction=config.approve_reaction,
         reject_reaction=config.reject_reaction,
         dry_run=config.dry_run,
@@ -574,7 +699,14 @@ def run(argv: list[str] | None = None) -> int:
                 )
             enqueued += approved
 
-            handled = _drain_queue(queue, store=store, executor=executor, reporter=reporter)
+            handled = _drain_queue(
+                queue,
+                config=config,
+                store=store,
+                executor=executor,
+                reporter=reporter,
+                process_pool=process_pool,
+            )
             elapsed_ms = int((time.time() - cycle_started) * 1000)
             _event(
                 "cycle_finished",
@@ -595,6 +727,8 @@ def run(argv: list[str] | None = None) -> int:
     finally:
         if socket_listener is not None:
             socket_listener.close()
+        if process_pool is not None:
+            process_pool.shutdown(wait=True)
         store.close()
 
     return 0

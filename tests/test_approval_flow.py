@@ -65,7 +65,7 @@ class ApprovalFlowTests(unittest.TestCase):
             queue = TaskQueue()
             client = FakeClient(ts="1.2")
             reporter = FakeReporter()
-            message = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do ship", raw={})
+            message = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do sh:rm -rf /tmp/ship", raw={})
             decision = decide_message(cfg, message)
             assert decision.task is not None
             task = decision.task
@@ -102,7 +102,7 @@ class ApprovalFlowTests(unittest.TestCase):
             queue = TaskQueue()
             reporter = FakeReporter()
             client = FakeClient(ts="1.2")
-            message = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do ship", raw={})
+            message = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do sh:rm -rf /tmp/ship", raw={})
             _process_command_message(
                 cfg,
                 message,
@@ -149,7 +149,7 @@ class ApprovalFlowTests(unittest.TestCase):
             queue = TaskQueue()
             reporter = FakeReporter()
             client = FakeClient(ts="1.2")
-            message = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do ship", raw={})
+            message = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do sh:rm -rf /tmp/ship", raw={})
             _process_command_message(
                 cfg,
                 message,
@@ -186,6 +186,37 @@ class ApprovalFlowTests(unittest.TestCase):
             assert approval is not None
             self.assertEqual(approval.status, ApprovalStatus.REJECTED)
             self.assertEqual(len(reporter.calls), 1)
+            store.close()
+
+    def test_reaction_mode_allowlisted_shell_runs_without_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = _config(approval_mode="reaction")
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            queue = TaskQueue()
+            client = FakeClient(ts="1.2")
+            reporter = FakeReporter()
+            message = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do sh:echo hi", raw={})
+
+            enqueued = _process_command_message(
+                cfg,
+                message,
+                store=store,
+                queue=queue,
+                client=client,  # type: ignore[arg-type]
+                reporter=reporter,  # type: ignore[arg-type]
+            )
+
+            self.assertEqual(enqueued, 1)
+            self.assertEqual(len(queue), 1)
+            self.assertEqual(len(client.calls), 0)
+            decision = decide_message(cfg, message)
+            assert decision.task is not None
+            row = store.get_task(decision.task.task_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.status, TaskStatus.PENDING)
+            self.assertIsNone(store.get_task_approval(decision.task.task_id))
             store.close()
 
 

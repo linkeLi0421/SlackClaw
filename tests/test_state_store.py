@@ -51,6 +51,19 @@ class StateStoreTests(unittest.TestCase):
 
             store.close()
 
+    def test_transition_task_status_is_compare_and_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_task("task-1", TaskStatus.PENDING, payload={})
+
+            self.assertTrue(store.transition_task_status("task-1", TaskStatus.PENDING, TaskStatus.RUNNING))
+            self.assertFalse(store.transition_task_status("task-1", TaskStatus.PENDING, TaskStatus.SUCCEEDED))
+            row = store.get_task("task-1")
+            assert row is not None
+            self.assertEqual(row.status, TaskStatus.RUNNING)
+            store.close()
+
     def test_running_tasks_marked_aborted(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = StateStore(str(Path(tmpdir) / "state.db"))

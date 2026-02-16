@@ -121,7 +121,7 @@ class ExecutorTests(unittest.TestCase):
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
-                args=["claude", "code", "review this repo"],
+                args=["claude", "-p", "review this repo"],
                 returncode=0,
                 stdout="claude done\n",
                 stderr="",

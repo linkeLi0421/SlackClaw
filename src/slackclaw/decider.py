@@ -13,6 +13,7 @@ _SIMPLE_SHELL_RE = re.compile(r"^shell\s+(.+)$", re.IGNORECASE)
 _SIMPLE_KIMI_RE = re.compile(r"^kimi\s+(.+)$", re.IGNORECASE)
 _SIMPLE_CODEX_RE = re.compile(r"^codex\s+(.+)$", re.IGNORECASE)
 _SIMPLE_CLAUDE_RE = re.compile(r"^claude\s+(.+)$", re.IGNORECASE)
+_THREAD_LOCAL_COMMAND_PREFIXES = ("kimi:", "codex:", "claude:")
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,8 @@ def decide_message(config: AppConfig, message: SlackMessage) -> Decision:
 
     task_id = _build_task_id(message.channel_id, message.ts, message.text)
     thread_ts = str(message.raw.get("thread_ts") or message.ts)
+    if lock_key == "global" and command_text.startswith(_THREAD_LOCAL_COMMAND_PREFIXES):
+        lock_key = f"thread:{thread_ts}"
     task = TaskSpec(
         task_id=task_id,
         channel_id=message.channel_id,

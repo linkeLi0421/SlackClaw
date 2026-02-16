@@ -28,6 +28,7 @@ Common optional:
 - `APPROVAL_MODE=reaction|none` (default `reaction`)
 - `APPROVE_REACTION=white_check_mark`
 - `REJECT_REACTION=x`
+- `SHELL_ALLOWLIST=...` (comma/space separated shell commands allowed to run without reaction approval)
 - `TRIGGER_MODE=prefix|mention`
 - `TRIGGER_PREFIX=!do`
 - `BOT_USER_ID=` (required when `TRIGGER_MODE=mention`)
@@ -36,6 +37,7 @@ Common optional:
 - `POLL_BATCH_SIZE=100`
 - `DRY_RUN=true`
 - `EXEC_TIMEOUT_SECONDS=120`
+- `WORKER_PROCESSES=1` (set `>1` to execute multiple tasks in parallel)
 - `RUN_MODE=approve|run` (default `approve`)
 - `REPORT_INPUT_MAX_CHARS=500` (default)
 - `REPORT_SUMMARY_MAX_CHARS=1200` (default)
@@ -76,7 +78,7 @@ Follow this once per Slack app at `https://api.slack.com/apps`:
 
 Expected behavior after setup:
 - New `!do ...` messages in `COMMAND_CHANNEL_ID` are detected.
-- With `APPROVAL_MODE=reaction`, agent posts a plan in thread.
+- With `APPROVAL_MODE=reaction`, only non-allowlisted `sh:` commands require reaction approval.
 - React `:white_check_mark:` to run, `:x:` to cancel.
 
 ## Use `.env`
@@ -102,6 +104,8 @@ Notes:
 - `LISTENER_MODE=poll` requires `APPROVAL_MODE=none`.
 - `BOT_USER_ID` is required only when `TRIGGER_MODE=mention`.
 - `RUN_MODE=run` forces no approval (executes immediately).
+- To use shell allowlist approvals, keep `RUN_MODE=approve` and `APPROVAL_MODE=reaction`.
+- `WORKER_PROCESSES>1` enables multi-process task execution.
 - Use `REPORT_*_MAX_CHARS` to control Slack report truncation lengths.
 - Reports are posted with Slack Block Kit + mrkdwn for cleaner formatting.
 - If `AGENT_RESPONSE_INSTRUCTION` contains spaces, wrap it in quotes in `.env`.
@@ -124,7 +128,9 @@ SlackClaw executes shell commands only when command text starts with `sh:` and `
 ```bash
 DRY_RUN=false
 EXEC_TIMEOUT_SECONDS=1800
-RUN_MODE=run
+WORKER_PROCESSES=4
+RUN_MODE=approve
+APPROVAL_MODE=reaction
 ```
 2. Restart agent:
 ```bash
@@ -163,12 +169,18 @@ SlackClaw maps these automatically:
 - `SHELL <cmd>` -> `sh:<cmd>`
 - `KIMI <prompt>` -> non-interactive `kimi --quiet -p "<prompt>"`
 - `CODEX <prompt>` -> non-interactive `codex exec --skip-git-repo-check -C <cwd> "<prompt>"`
-- `CLAUDE <prompt>` -> `claude code "<prompt>"`
+- `CLAUDE <prompt>` -> non-interactive `claude -p "<prompt>"`
+
+Shell allowlist approval behavior:
+- With `APPROVAL_MODE=reaction`, only non-allowlisted `sh:` commands pause for emoji approval.
+- Allowlisted shell commands run immediately.
+- Example disallowed command requiring approval: `SHELL rm -rf /tmp/example`.
 
 Thread-scoped behavior for `KIMI`/`CODEX`/`CLAUDE`:
 - Session/context key = Slack thread root (`thread_ts`).
 - Replies in the same Slack thread reuse agent state for that thread.
 - Shared thread context is persisted and injected into later agent prompts in that thread.
+- Default lock key for these agent commands is thread-scoped (`thread:<thread_ts>`), so different Slack threads can run in parallel when `WORKER_PROCESSES>1`.
 
 Codex output behavior:
 - Uses `codex exec --json` internally.
@@ -195,7 +207,7 @@ Kimi CLI example (non-interactive):
 
 Claude Code example (CLI syntax may vary by install):
 ```text
-!do sh:cd /absolute/path/to/repo && claude code "Read README.md and propose 3 concrete fixes"
+!do sh:cd /absolute/path/to/repo && claude -p "Read README.md and propose 3 concrete fixes"
 ```
 
 If your Claude command differs, run `claude --help` locally and update the Slack command accordingly.

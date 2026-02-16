@@ -34,6 +34,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.approve_reaction, "white_check_mark")
         self.assertEqual(cfg.reject_reaction, "x")
         self.assertTrue(cfg.agent_response_instruction.startswith("Format the final answer"))
+        self.assertEqual(cfg.worker_processes, 1)
+        self.assertIn("echo", cfg.shell_allowlist)
+        self.assertNotIn("rm", cfg.shell_allowlist)
 
     def test_missing_required_env_raises(self) -> None:
         env = dict(self.base_env)
@@ -106,6 +109,18 @@ class ConfigTests(unittest.TestCase):
         env["AGENT_RESPONSE_INSTRUCTION"] = ""
         cfg = load_config(env)
         self.assertEqual(cfg.agent_response_instruction, "")
+
+    def test_invalid_worker_processes_raises(self) -> None:
+        env = dict(self.base_env)
+        env["WORKER_PROCESSES"] = "0"
+        with self.assertRaises(ConfigError):
+            load_config(env)
+
+    def test_shell_allowlist_parses_comma_or_space(self) -> None:
+        env = dict(self.base_env)
+        env["SHELL_ALLOWLIST"] = "echo, ls  ,pytest"
+        cfg = load_config(env)
+        self.assertEqual(cfg.shell_allowlist, ("echo", "ls", "pytest"))
 
 
 if __name__ == "__main__":

@@ -117,6 +117,7 @@ class DeciderTests(unittest.TestCase):
         self.assertTrue(decision.should_run)
         assert decision.task is not None
         self.assertEqual(decision.task.command_text, "kimi:improve repo")
+        self.assertEqual(decision.task.lock_key, "thread:1.1")
 
     def test_simple_codex_command_without_prefix(self) -> None:
         cfg = _config(trigger_mode="prefix")
@@ -125,6 +126,7 @@ class DeciderTests(unittest.TestCase):
         self.assertTrue(decision.should_run)
         assert decision.task is not None
         self.assertEqual(decision.task.command_text, "codex:fix tests")
+        self.assertEqual(decision.task.lock_key, "thread:1.1")
 
     def test_simple_claude_command_without_prefix(self) -> None:
         cfg = _config(trigger_mode="prefix")
@@ -133,6 +135,7 @@ class DeciderTests(unittest.TestCase):
         self.assertTrue(decision.should_run)
         assert decision.task is not None
         self.assertEqual(decision.task.command_text, "claude:review this")
+        self.assertEqual(decision.task.lock_key, "thread:1.1")
 
     def test_task_uses_thread_root_ts_when_present(self) -> None:
         cfg = _config(trigger_mode="prefix")
@@ -148,6 +151,20 @@ class DeciderTests(unittest.TestCase):
         assert decision.task is not None
         self.assertEqual(decision.task.message_ts, "2.2")
         self.assertEqual(decision.task.thread_ts, "1.1")
+
+    def test_thread_lock_uses_thread_root_ts_for_agents(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(
+            channel_id="C111",
+            ts="2.2",
+            user="U1",
+            text="KIMI analyze this",
+            raw={"thread_ts": "1.1"},
+        )
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.lock_key, "thread:1.1")
 
 
 if __name__ == "__main__":

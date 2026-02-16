@@ -18,7 +18,7 @@ class StateStore:
         db_file = Path(db_path)
         if db_file.parent and not db_file.parent.exists():
             db_file.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, timeout=30)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -164,6 +164,18 @@ class StateStore:
             (status.value, _utc_now(), task_id),
         )
         self._conn.commit()
+
+    def transition_task_status(self, task_id: str, from_status: TaskStatus, to_status: TaskStatus) -> bool:
+        cur = self._conn.execute(
+            """
+            UPDATE tasks
+            SET status = ?, updated_at = ?
+            WHERE task_id = ? AND status = ?
+            """,
+            (to_status.value, _utc_now(), task_id, from_status.value),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
 
     def get_task(self, task_id: str) -> TaskRecord | None:
         row = self._conn.execute(

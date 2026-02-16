@@ -241,7 +241,7 @@ class TaskExecutor:
         prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
         try:
             completed = subprocess.run(
-                ["claude", "code", prompt_with_context],
+                ["claude", "-p", prompt_with_context],
                 text=True,
                 capture_output=True,
                 timeout=self._timeout_seconds,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -12,6 +13,47 @@ ALLOWED_RUN_MODES = {"approve", "run"}
 DEFAULT_REPORT_INPUT_MAX_CHARS = 500
 DEFAULT_REPORT_SUMMARY_MAX_CHARS = 1200
 DEFAULT_REPORT_DETAILS_MAX_CHARS = 4000
+DEFAULT_SHELL_ALLOWLIST = (
+    "echo",
+    "printf",
+    "pwd",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "rg",
+    "find",
+    "sed",
+    "awk",
+    "cut",
+    "sort",
+    "uniq",
+    "date",
+    "whoami",
+    "uname",
+    "env",
+    "true",
+    "false",
+    "cd",
+    "python",
+    "python3",
+    "pip",
+    "pip3",
+    "pytest",
+    "node",
+    "npm",
+    "yarn",
+    "pnpm",
+    "go",
+    "cargo",
+    "make",
+    "git",
+    "bash",
+    "sh",
+    "zsh",
+)
 DEFAULT_AGENT_RESPONSE_INSTRUCTION = (
     "Format the final answer for Slack Markdown. Start with a one-line summary, "
     "use short bullet lists, and put commands/code in fenced code blocks."
@@ -46,6 +88,8 @@ class AppConfig:
     approve_reaction: str
     reject_reaction: str
     agent_response_instruction: str = ""
+    worker_processes: int = 1
+    shell_allowlist: tuple[str, ...] = DEFAULT_SHELL_ALLOWLIST
 
 
 def _required(env: Mapping[str, str], key: str) -> str:
@@ -101,6 +145,17 @@ def _validate_mode(name: str, value: str, allowed: set[str]) -> str:
     return normalized
 
 
+def _parse_command_list(name: str, raw_value: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = (raw_value or "").strip()
+    if not value:
+        return default
+    tokens = [item.strip().lower() for item in re.split(r"[,\s]+", value) if item.strip()]
+    if not tokens:
+        raise ConfigError(f"{name} must contain at least one command when set")
+    deduped = tuple(dict.fromkeys(tokens))
+    return deduped
+
+
 def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     source = env if env is not None else os.environ
     slack_bot_token = (source.get("SLACK_BOT_TOKEN") or source.get("SLACK_MCP_XOXB_TOKEN") or "").strip()
@@ -144,6 +199,11 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         source.get("EXEC_TIMEOUT_SECONDS", ""),
         120,
     )
+    worker_processes = _parse_positive_int(
+        "WORKER_PROCESSES",
+        source.get("WORKER_PROCESSES", ""),
+        1,
+    )
     dry_run = _parse_bool("DRY_RUN", source.get("DRY_RUN", ""), True)
     report_input_max_chars = _parse_positive_int(
         "REPORT_INPUT_MAX_CHARS",
@@ -183,6 +243,11 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         raise ConfigError("REJECT_REACTION cannot be empty")
     if approve_reaction == reject_reaction:
         raise ConfigError("APPROVE_REACTION and REJECT_REACTION must be different")
+    shell_allowlist = _parse_command_list(
+        "SHELL_ALLOWLIST",
+        source.get("SHELL_ALLOWLIST", ""),
+        DEFAULT_SHELL_ALLOWLIST,
+    )
 
     return AppConfig(
         slack_bot_token=slack_bot_token,
@@ -207,4 +272,6 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         approve_reaction=approve_reaction,
         reject_reaction=reject_reaction,
         agent_response_instruction=agent_response_instruction,
+        worker_processes=worker_processes,
+        shell_allowlist=shell_allowlist,
     )
