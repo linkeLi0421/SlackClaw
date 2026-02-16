@@ -139,6 +139,15 @@ SlackClaw maps these automatically:
 - `CODEX <prompt>` -> non-interactive `codex exec --skip-git-repo-check -C <cwd> "<prompt>"`
 - `CLAUDE <prompt>` -> `claude code "<prompt>"`
 
+Thread-scoped behavior for `KIMI`/`CODEX`/`CLAUDE`:
+- Session/context key = Slack thread root (`thread_ts`).
+- Replies in the same Slack thread reuse agent state for that thread.
+- Shared thread context is persisted and injected into later agent prompts in that thread.
+
+Codex output behavior:
+- Uses `codex exec --json` internally.
+- Reporter keeps assistant response text and filters noisy CLI metadata/log lines.
+
 You can still use the advanced explicit form:
 ```text
 !do sh:echo hello

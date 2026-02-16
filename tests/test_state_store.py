@@ -130,6 +130,25 @@ class StateStoreTests(unittest.TestCase):
             self.assertFalse(unresolved)
             store.close()
 
+    def test_agent_session_and_thread_context_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+
+            self.assertIsNone(store.get_agent_session("C123", "1.1", "codex"))
+            store.upsert_agent_session("C123", "1.1", "codex", "session-1")
+            self.assertEqual(store.get_agent_session("C123", "1.1", "codex"), "session-1")
+
+            store.upsert_agent_session("C123", "1.1", "codex", "session-2")
+            self.assertEqual(store.get_agent_session("C123", "1.1", "codex"), "session-2")
+
+            self.assertEqual(store.get_thread_context("C123", "1.1"), "")
+            store.upsert_thread_context("C123", "1.1", "ctx-a")
+            self.assertEqual(store.get_thread_context("C123", "1.1"), "ctx-a")
+            store.upsert_thread_context("C123", "1.1", "ctx-b")
+            self.assertEqual(store.get_thread_context("C123", "1.1"), "ctx-b")
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

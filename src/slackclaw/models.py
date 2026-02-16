@@ -52,6 +52,7 @@ class TaskSpec:
     task_id: str
     channel_id: str
     message_ts: str
+    thread_ts: str
     trigger_user: str
     trigger_text: str
     command_text: str

@@ -11,6 +11,7 @@ def _task(task_id: str) -> TaskSpec:
         task_id=task_id,
         channel_id="C111",
         message_ts="1.1",
+        thread_ts="1.1",
         trigger_user="U1",
         trigger_text="!do x",
         command_text="x",

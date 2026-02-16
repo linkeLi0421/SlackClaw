@@ -61,6 +61,23 @@ class StateStore:
               acquired_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+              channel_id TEXT NOT NULL,
+              thread_ts TEXT NOT NULL,
+              agent TEXT NOT NULL,
+              session_id TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(channel_id, thread_ts, agent)
+            );
+
+            CREATE TABLE IF NOT EXISTS thread_context (
+              channel_id TEXT NOT NULL,
+              thread_ts TEXT NOT NULL,
+              context TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(channel_id, thread_ts)
+            );
+
             CREATE TABLE IF NOT EXISTS task_approvals (
               task_id TEXT PRIMARY KEY,
               channel_id TEXT NOT NULL,
@@ -77,6 +94,9 @@ class StateStore:
 
             CREATE INDEX IF NOT EXISTS idx_task_approvals_lookup
               ON task_approvals(channel_id, source_message_ts, approval_message_ts, status);
+
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_lookup
+              ON agent_sessions(channel_id, thread_ts, agent);
             """
         )
         self._conn.commit()
@@ -207,6 +227,62 @@ class StateStore:
             WHERE lock_key = ? AND task_id = ?
             """,
             (lock_key, task_id),
+        )
+        self._conn.commit()
+
+    def get_agent_session(self, channel_id: str, thread_ts: str, agent: str) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT session_id
+            FROM agent_sessions
+            WHERE channel_id = ? AND thread_ts = ? AND agent = ?
+            LIMIT 1
+            """,
+            (channel_id, thread_ts, agent),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["session_id"])
+
+    def upsert_agent_session(self, channel_id: str, thread_ts: str, agent: str, session_id: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO agent_sessions(channel_id, thread_ts, agent, session_id, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(channel_id, thread_ts, agent)
+            DO UPDATE SET
+              session_id = excluded.session_id,
+              updated_at = excluded.updated_at
+            """,
+            (channel_id, thread_ts, agent, session_id, _utc_now()),
+        )
+        self._conn.commit()
+
+    def get_thread_context(self, channel_id: str, thread_ts: str) -> str:
+        row = self._conn.execute(
+            """
+            SELECT context
+            FROM thread_context
+            WHERE channel_id = ? AND thread_ts = ?
+            LIMIT 1
+            """,
+            (channel_id, thread_ts),
+        ).fetchone()
+        if row is None:
+            return ""
+        return str(row["context"] or "")
+
+    def upsert_thread_context(self, channel_id: str, thread_ts: str, context: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO thread_context(channel_id, thread_ts, context, updated_at)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(channel_id, thread_ts)
+            DO UPDATE SET
+              context = excluded.context,
+              updated_at = excluded.updated_at
+            """,
+            (channel_id, thread_ts, context, _utc_now()),
         )
         self._conn.commit()
 

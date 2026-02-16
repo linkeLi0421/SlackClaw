@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from subprocess import CompletedProcess
 from unittest.mock import patch
+from pathlib import Path
 
 from slackclaw.executor import TaskExecutor
 from slackclaw.models import TaskSpec, TaskStatus
+from slackclaw.state_store import StateStore
 
 
 def _task(command_text: str) -> TaskSpec:
@@ -13,6 +17,7 @@ def _task(command_text: str) -> TaskSpec:
         task_id="task-1",
         channel_id="C111",
         message_ts="1.1",
+        thread_ts="1.1",
         trigger_user="U1",
         trigger_text="!do x",
         command_text=command_text,
@@ -91,6 +96,69 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, TaskStatus.SUCCEEDED)
         self.assertEqual(result.summary, "claude command completed")
         self.assertIn("claude done", result.details)
+
+    def test_codex_uses_json_output_and_resumes_session_per_thread(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+
+            first_events = "\n".join(
+                [
+                    json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {"type": "agent_message", "text": "first answer"},
+                        }
+                    ),
+                ]
+            )
+            second_events = "\n".join(
+                [
+                    json.dumps({"type": "turn.started"}),
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {"type": "agent_message", "text": "second answer"},
+                        }
+                    ),
+                ]
+            )
+
+            with patch("slackclaw.executor.subprocess.run") as mock_run:
+                mock_run.side_effect = [
+                    CompletedProcess(
+                        args=[],
+                        returncode=0,
+                        stdout=first_events,
+                        stderr="ERROR state db missing rollout path for thread x",
+                    ),
+                    CompletedProcess(
+                        args=[],
+                        returncode=0,
+                        stdout=second_events,
+                        stderr="",
+                    ),
+                ]
+
+                result1 = executor.execute(_task("codex:one"), store=store)
+                result2 = executor.execute(_task("codex:two"), store=store)
+
+            self.assertEqual(result1.status, TaskStatus.SUCCEEDED)
+            self.assertEqual(result1.details, "first answer")
+            self.assertEqual(result2.status, TaskStatus.SUCCEEDED)
+            self.assertEqual(result2.details, "second answer")
+            self.assertEqual(store.get_agent_session("C111", "1.1", "codex"), "thread-1")
+
+            first_cmd = mock_run.call_args_list[0][0][0]
+            second_cmd = mock_run.call_args_list[1][0][0]
+            self.assertIn("--json", first_cmd)
+            self.assertEqual(first_cmd[:2], ["codex", "exec"])
+            self.assertEqual(second_cmd[:3], ["codex", "exec", "resume"])
+            self.assertIn("thread-1", second_cmd)
+            self.assertIn("agent=codex", store.get_thread_context("C111", "1.1"))
+            store.close()
 
 
 if __name__ == "__main__":

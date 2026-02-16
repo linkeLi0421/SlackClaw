@@ -44,6 +44,7 @@ def _task_payload(task: TaskSpec) -> dict:
     return {
         "channel_id": task.channel_id,
         "message_ts": task.message_ts,
+        "thread_ts": task.thread_ts,
         "trigger_user": task.trigger_user,
         "trigger_text": task.trigger_text,
         "command_text": task.command_text,
@@ -53,10 +54,13 @@ def _task_payload(task: TaskSpec) -> dict:
 
 def _task_from_payload(task_id: str, payload: dict) -> TaskSpec | None:
     try:
+        message_ts = str(payload["message_ts"])
+        thread_ts = str(payload.get("thread_ts") or message_ts)
         return TaskSpec(
             task_id=task_id,
             channel_id=str(payload["channel_id"]),
-            message_ts=str(payload["message_ts"]),
+            message_ts=message_ts,
+            thread_ts=thread_ts,
             trigger_user=str(payload["trigger_user"]),
             trigger_text=str(payload["trigger_text"]),
             command_text=str(payload["command_text"]),
@@ -92,7 +96,7 @@ def _request_reaction_approval(
     try:
         posted = client.chat_post_message(
             channel_id=task.channel_id,
-            thread_ts=task.message_ts,
+            thread_ts=task.thread_ts,
             text=plan_text,
         )
         approval_message_ts = str(posted.get("ts") or task.message_ts)
@@ -244,6 +248,7 @@ def _drain_queue(
             task_id=task.task_id,
             channel_id=task.channel_id,
             ts=task.message_ts,
+            thread_ts=task.thread_ts,
             lock_key=task.lock_key,
         )
 
@@ -272,7 +277,7 @@ def _drain_queue(
 
         try:
             try:
-                result = executor.execute(task)
+                result = executor.execute(task, store=store)
             except Exception as exc:  # pragma: no cover - defensive boundary
                 result = TaskExecutionResult(
                     status=TaskStatus.FAILED,

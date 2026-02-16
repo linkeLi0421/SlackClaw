@@ -112,10 +112,12 @@ def decide_message(config: AppConfig, message: SlackMessage) -> Decision:
         return Decision(should_run=False, reason="empty command after lock prefix", task=None)
 
     task_id = _build_task_id(message.channel_id, message.ts, message.text)
+    thread_ts = str(message.raw.get("thread_ts") or message.ts)
     task = TaskSpec(
         task_id=task_id,
         channel_id=message.channel_id,
         message_ts=message.ts,
+        thread_ts=thread_ts,
         trigger_user=message.user,
         trigger_text=message.text,
         command_text=command_text,

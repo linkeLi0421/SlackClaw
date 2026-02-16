@@ -120,6 +120,21 @@ class DeciderTests(unittest.TestCase):
         assert decision.task is not None
         self.assertEqual(decision.task.command_text, "claude:review this")
 
+    def test_task_uses_thread_root_ts_when_present(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(
+            channel_id="C111",
+            ts="2.2",
+            user="U1",
+            text="!do run tests",
+            raw={"thread_ts": "1.1"},
+        )
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.message_ts, "2.2")
+        self.assertEqual(decision.task.thread_ts, "1.1")
+
 
 if __name__ == "__main__":
     unittest.main()
