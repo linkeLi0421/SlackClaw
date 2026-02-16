@@ -39,6 +39,7 @@ Common optional:
 - `REPORT_INPUT_MAX_CHARS=500` (default)
 - `REPORT_SUMMARY_MAX_CHARS=1200` (default)
 - `REPORT_DETAILS_MAX_CHARS=4000` (default)
+- `AGENT_RESPONSE_INSTRUCTION=...` (optional prompt style for KIMI/CODEX/CLAUDE; empty disables)
 
 ## Slack App Setup (Socket Mode + Events)
 Follow this once per Slack app at `https://api.slack.com/apps`:
@@ -100,6 +101,8 @@ Notes:
 - `BOT_USER_ID` is required only when `TRIGGER_MODE=mention`.
 - `RUN_MODE=run` forces no approval (executes immediately).
 - Use `REPORT_*_MAX_CHARS` to control Slack report truncation lengths.
+- Reports are posted with Slack Block Kit + mrkdwn for cleaner formatting.
+- If `AGENT_RESPONSE_INSTRUCTION` contains spaces, wrap it in quotes in `.env`.
 
 ## Run
 - Single cycle:
@@ -147,6 +150,10 @@ Thread-scoped behavior for `KIMI`/`CODEX`/`CLAUDE`:
 Codex output behavior:
 - Uses `codex exec --json` internally.
 - Reporter keeps assistant response text and filters noisy CLI metadata/log lines.
+
+Formatting behavior:
+- Slack reports are rendered as structured Block Kit sections (`Input`, `Summary`, `Details`).
+- KIMI/CODEX/CLAUDE prompts include `AGENT_RESPONSE_INSTRUCTION` to encourage cleaner markdown output.
 
 You can still use the advanced explicit form:
 ```text

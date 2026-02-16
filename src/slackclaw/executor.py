@@ -10,12 +10,26 @@ from .state_store import StateStore
 
 
 _THREAD_CONTEXT_MAX_CHARS = 12000
+_DEFAULT_AGENT_RESPONSE_INSTRUCTION = (
+    "Format the final answer for Slack Markdown.\n"
+    "- Start with a one-line summary.\n"
+    "- Use short sections with bullets.\n"
+    "- Put commands/code in fenced code blocks.\n"
+    "- Skip CLI metadata/log headers."
+)
 
 
 class TaskExecutor:
-    def __init__(self, *, dry_run: bool, timeout_seconds: int) -> None:
+    def __init__(
+        self,
+        *,
+        dry_run: bool,
+        timeout_seconds: int,
+        response_format_instruction: str = _DEFAULT_AGENT_RESPONSE_INSTRUCTION,
+    ) -> None:
         self._dry_run = dry_run
         self._timeout_seconds = timeout_seconds
+        self._response_format_instruction = response_format_instruction.strip()
 
     def execute(self, task: TaskSpec, *, store: StateStore | None = None) -> TaskExecutionResult:
         if self._dry_run:
@@ -333,17 +347,26 @@ class TaskExecutor:
             return
         store.upsert_agent_session(task.channel_id, task.thread_ts, agent, session_id)
 
-    @staticmethod
-    def _prompt_with_context(prompt: str, *, task: TaskSpec, store: StateStore | None) -> str:
+    def _prompt_with_context(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> str:
         if store is None:
-            return prompt
-        context = store.get_thread_context(task.channel_id, task.thread_ts).strip()
-        if not context:
-            return prompt
+            base_prompt = prompt
+        else:
+            context = store.get_thread_context(task.channel_id, task.thread_ts).strip()
+            if not context:
+                base_prompt = prompt
+            else:
+                base_prompt = (
+                    "Shared thread context from previous agent runs:\n"
+                    f"{context}\n\n"
+                    f"Current request:\n{prompt}"
+                )
+
+        if not self._response_format_instruction:
+            return base_prompt
         return (
-            "Shared thread context from previous agent runs:\n"
-            f"{context}\n\n"
-            f"Current request:\n{prompt}"
+            f"{base_prompt}\n\n"
+            "Response format requirements:\n"
+            f"{self._response_format_instruction}"
         )
 
     @staticmethod

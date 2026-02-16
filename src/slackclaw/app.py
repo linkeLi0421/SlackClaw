@@ -349,7 +349,11 @@ def run(argv: list[str] | None = None) -> int:
         store.close()
         return 4
     queue = TaskQueue()
-    executor = TaskExecutor(dry_run=config.dry_run, timeout_seconds=config.exec_timeout_seconds)
+    executor = TaskExecutor(
+        dry_run=config.dry_run,
+        timeout_seconds=config.exec_timeout_seconds,
+        response_format_instruction=config.agent_response_instruction,
+    )
     reporter = Reporter(
         report_channel_id=config.report_channel_id,
         client=client,
@@ -372,6 +376,7 @@ def run(argv: list[str] | None = None) -> int:
         approve_reaction=config.approve_reaction,
         reject_reaction=config.reject_reaction,
         dry_run=config.dry_run,
+        agent_response_instruction_enabled=bool(config.agent_response_instruction),
         report_input_max_chars=config.report_input_max_chars,
         report_summary_max_chars=config.report_summary_max_chars,
         report_details_max_chars=config.report_details_max_chars,

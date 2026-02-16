@@ -105,13 +105,16 @@ class SlackWebClient:
         channel_id: str,
         text: str,
         thread_ts: str | None = None,
+        blocks: list[dict] | None = None,
     ) -> dict:
-        payload: dict[str, str] = {
+        payload: dict[str, object] = {
             "channel": channel_id,
             "text": text,
         }
         if thread_ts:
             payload["thread_ts"] = thread_ts
+        if blocks:
+            payload["blocks"] = blocks
         return self.api_call("POST", "chat.postMessage", json_body=payload)
 
     def apps_connections_open(self, *, app_token: str) -> dict:

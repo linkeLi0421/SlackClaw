@@ -12,6 +12,10 @@ ALLOWED_RUN_MODES = {"approve", "run"}
 DEFAULT_REPORT_INPUT_MAX_CHARS = 500
 DEFAULT_REPORT_SUMMARY_MAX_CHARS = 1200
 DEFAULT_REPORT_DETAILS_MAX_CHARS = 4000
+DEFAULT_AGENT_RESPONSE_INSTRUCTION = (
+    "Format the final answer for Slack Markdown. Start with a one-line summary, "
+    "use short bullet lists, and put commands/code in fenced code blocks."
+)
 
 
 class ConfigError(ValueError):
@@ -41,6 +45,7 @@ class AppConfig:
     approval_mode: str
     approve_reaction: str
     reject_reaction: str
+    agent_response_instruction: str = ""
 
 
 def _required(env: Mapping[str, str], key: str) -> str:
@@ -155,6 +160,10 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         source.get("REPORT_DETAILS_MAX_CHARS", ""),
         DEFAULT_REPORT_DETAILS_MAX_CHARS,
     )
+    if "AGENT_RESPONSE_INSTRUCTION" in source:
+        agent_response_instruction = (source.get("AGENT_RESPONSE_INSTRUCTION") or "").strip()
+    else:
+        agent_response_instruction = DEFAULT_AGENT_RESPONSE_INSTRUCTION
     run_mode = _validate_mode("RUN_MODE", source.get("RUN_MODE", "approve"), ALLOWED_RUN_MODES)
     approval_mode = _validate_mode(
         "APPROVAL_MODE",
@@ -197,4 +206,5 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         approval_mode=approval_mode,
         approve_reaction=approve_reaction,
         reject_reaction=reject_reaction,
+        agent_response_instruction=agent_response_instruction,
     )

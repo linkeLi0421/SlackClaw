@@ -33,6 +33,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.approval_mode, "reaction")
         self.assertEqual(cfg.approve_reaction, "white_check_mark")
         self.assertEqual(cfg.reject_reaction, "x")
+        self.assertTrue(cfg.agent_response_instruction.startswith("Format the final answer"))
 
     def test_missing_required_env_raises(self) -> None:
         env = dict(self.base_env)
@@ -99,6 +100,12 @@ class ConfigTests(unittest.TestCase):
         env["REPORT_DETAILS_MAX_CHARS"] = "0"
         with self.assertRaises(ConfigError):
             load_config(env)
+
+    def test_agent_response_instruction_allows_empty_override(self) -> None:
+        env = dict(self.base_env)
+        env["AGENT_RESPONSE_INSTRUCTION"] = ""
+        cfg = load_config(env)
+        self.assertEqual(cfg.agent_response_instruction, "")
 
 
 if __name__ == "__main__":

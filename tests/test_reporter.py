@@ -8,13 +8,20 @@ from slackclaw.reporter import Reporter
 
 class FakeClient:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, list[dict] | None]] = []
         self.error: Exception | None = None
 
-    def chat_post_message(self, *, channel_id: str, text: str, thread_ts: str | None = None) -> dict:
+    def chat_post_message(
+        self,
+        *,
+        channel_id: str,
+        text: str,
+        thread_ts: str | None = None,
+        blocks: list[dict] | None = None,
+    ) -> dict:
         if self.error is not None:
             raise self.error
-        self.calls.append((channel_id, text))
+        self.calls.append((channel_id, text, blocks))
         return {"ok": True, "ts": "1.1"}
 
 
@@ -39,10 +46,14 @@ class ReporterTests(unittest.TestCase):
         reporter.report(self._task(), result)
 
         self.assertEqual(len(client.calls), 1)
-        channel_id, text = client.calls[0]
+        channel_id, text, blocks = client.calls[0]
         self.assertEqual(channel_id, "C_REPORT")
         self.assertIn("SlackClaw task task-1", text)
         self.assertIn("summary: ok", text)
+        self.assertIsNotNone(blocks)
+        assert blocks is not None
+        self.assertEqual(blocks[0]["type"], "section")
+        self.assertIn("*SlackClaw task*", str(blocks[0]))
 
     def test_report_raises_when_post_fails(self) -> None:
         client = FakeClient()
@@ -81,10 +92,11 @@ class ReporterTests(unittest.TestCase):
 
         reporter.report(task, result)
 
-        _channel, text = client.calls[0]
+        _channel, text, blocks = client.calls[0]
         self.assertIn("input: abcde...", text)
         self.assertIn("summary: 0123456...", text)
         self.assertIn("details: zzzzzzzzz...", text)
+        self.assertIsNotNone(blocks)
 
 
 if __name__ == "__main__":
