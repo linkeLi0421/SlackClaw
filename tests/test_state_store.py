@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from slackclaw.models import TaskStatus
+from slackclaw.models import ApprovalStatus, TaskStatus
 from slackclaw.state_store import StateStore
 
 
@@ -79,6 +79,55 @@ class StateStoreTests(unittest.TestCase):
 
             store.release_execution_lock("global", "task-1")
             self.assertTrue(store.acquire_execution_lock("global", "task-2"))
+            store.close()
+
+    def test_task_approval_roundtrip_and_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+
+            store.upsert_task_approval(
+                task_id="task-1",
+                channel_id="C123",
+                source_message_ts="1.1",
+                approval_message_ts="1.2",
+                approve_reaction="white_check_mark",
+                reject_reaction="x",
+            )
+
+            pending = store.get_pending_approval_for_message("C123", "1.1")
+            self.assertIsNotNone(pending)
+            assert pending is not None
+            self.assertEqual(pending.status, ApprovalStatus.PENDING)
+            self.assertEqual(pending.task_id, "task-1")
+
+            pending_by_plan = store.get_pending_approval_for_message("C123", "1.2")
+            self.assertIsNotNone(pending_by_plan)
+            assert pending_by_plan is not None
+            self.assertEqual(pending_by_plan.task_id, "task-1")
+
+            resolved = store.resolve_task_approval(
+                task_id="task-1",
+                status=ApprovalStatus.APPROVED,
+                decided_by="U1",
+                decision_reaction="white_check_mark",
+            )
+            self.assertTrue(resolved)
+
+            row = store.get_task_approval("task-1")
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.status, ApprovalStatus.APPROVED)
+            self.assertEqual(row.decided_by, "U1")
+            self.assertEqual(row.decision_reaction, "white_check_mark")
+
+            unresolved = store.resolve_task_approval(
+                task_id="task-1",
+                status=ApprovalStatus.REJECTED,
+                decided_by="U2",
+                decision_reaction="x",
+            )
+            self.assertFalse(unresolved)
             store.close()
 
 

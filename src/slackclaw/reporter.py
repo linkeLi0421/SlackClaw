@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import subprocess
-
 from .models import TaskExecutionResult, TaskSpec, TaskStatus
+from .slack_api import SlackWebClient
 
 
 def _trim(text: str, max_len: int) -> str:
@@ -12,9 +11,9 @@ def _trim(text: str, max_len: int) -> str:
 
 
 class Reporter:
-    def __init__(self, *, report_channel_id: str, desktop_report_script: str) -> None:
+    def __init__(self, *, client: SlackWebClient, report_channel_id: str) -> None:
+        self._client = client
         self._report_channel_id = report_channel_id
-        self._desktop_report_script = desktop_report_script
 
     def report(self, task: TaskSpec, result: TaskExecutionResult) -> None:
         status_icon = "✅" if result.status == TaskStatus.SUCCEEDED else "❌"
@@ -27,19 +26,4 @@ class Reporter:
                 f"details: {_trim(result.details, 400)}",
             ]
         )
-        self._post_to_slack(text)
-
-    def _post_to_slack(self, text: str) -> None:
-        cmd = [
-            "python3",
-            self._desktop_report_script,
-            "--channel",
-            self._report_channel_id,
-            "--text",
-            text,
-            "--quiet",
-        ]
-        completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if completed.returncode != 0:
-            stderr = (completed.stderr or "").strip()
-            raise RuntimeError(f"reporter failed to post to slack: {stderr or completed.stdout}")
+        self._client.chat_post_message(channel_id=self._report_channel_id, text=text)

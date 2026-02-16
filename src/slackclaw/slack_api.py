@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -28,13 +29,14 @@ class SlackWebClient:
         *,
         params: dict | None = None,
         json_body: dict | None = None,
+        token: str | None = None,
         retry_429_once: bool = True,
     ) -> dict:
         url = f"https://slack.com/api/{endpoint}"
         if params:
             url = url + "?" + urllib.parse.urlencode(params)
 
-        headers = {"Authorization": f"Bearer {self._token}"}
+        headers = {"Authorization": f"Bearer {token or self._token}"}
         data = None
         if json_body is not None:
             data = json.dumps(json_body).encode("utf-8")
@@ -96,3 +98,21 @@ class SlackWebClient:
         if cursor:
             params["cursor"] = cursor
         return self.api_call("GET", "conversations.history", params=params)
+
+    def chat_post_message(
+        self,
+        *,
+        channel_id: str,
+        text: str,
+        thread_ts: str | None = None,
+    ) -> dict:
+        payload: dict[str, str] = {
+            "channel": channel_id,
+            "text": text,
+        }
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        return self.api_call("POST", "chat.postMessage", json_body=payload)
+
+    def apps_connections_open(self, *, app_token: str) -> dict:
+        return self.api_call("POST", "apps.connections.open", json_body={}, token=app_token)

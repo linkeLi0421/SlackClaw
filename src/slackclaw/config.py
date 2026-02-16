@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Mapping
 
 
-DEFAULT_DESKTOP_REPORT_SCRIPT = "/Users/link/Desktop/slack-web-post/scripts/post_channel.py"
 ALLOWED_TRIGGER_MODES = {"prefix", "mention"}
-ALLOWED_REPORTER_MODES = {"desktop_skill"}
+ALLOWED_LISTENER_MODES = {"poll", "socket"}
+ALLOWED_APPROVAL_MODES = {"none", "reaction"}
 
 
 class ConfigError(ValueError):
@@ -18,18 +17,22 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class AppConfig:
     slack_bot_token: str
+    slack_app_token: str
     command_channel_id: str
     report_channel_id: str
+    listener_mode: str
+    socket_read_timeout_seconds: float
     poll_interval: float
     poll_batch_size: int
     trigger_mode: str
     trigger_prefix: str
     bot_user_id: str
     state_db_path: str
-    reporter_mode: str
-    desktop_report_script: str
     exec_timeout_seconds: int
     dry_run: bool
+    approval_mode: str
+    approve_reaction: str
+    reject_reaction: str
 
 
 def _required(env: Mapping[str, str], key: str) -> str:
@@ -91,6 +94,20 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     if not slack_bot_token:
         raise ConfigError("Missing required environment variable: SLACK_BOT_TOKEN (or SLACK_MCP_XOXB_TOKEN)")
 
+    listener_mode = _validate_mode(
+        "LISTENER_MODE",
+        source.get("LISTENER_MODE", "socket"),
+        ALLOWED_LISTENER_MODES,
+    )
+    slack_app_token = (source.get("SLACK_APP_TOKEN") or source.get("SLACK_MCP_XAPP_TOKEN") or "").strip()
+    if listener_mode == "socket" and not slack_app_token:
+        raise ConfigError("SLACK_APP_TOKEN (or SLACK_MCP_XAPP_TOKEN) is required when LISTENER_MODE=socket")
+    socket_read_timeout_seconds = _parse_positive_float(
+        "SOCKET_READ_TIMEOUT_SECONDS",
+        source.get("SOCKET_READ_TIMEOUT_SECONDS", ""),
+        1.0,
+    )
+
     command_channel_id = _required(source, "COMMAND_CHANNEL_ID")
     report_channel_id = _required(source, "REPORT_CHANNEL_ID")
     poll_interval = _parse_positive_float("POLL_INTERVAL", source.get("POLL_INTERVAL", ""), 3.0)
@@ -109,38 +126,45 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     if not state_db_path:
         raise ConfigError("STATE_DB_PATH cannot be empty")
 
-    reporter_mode = _validate_mode(
-        "REPORTER_MODE",
-        source.get("REPORTER_MODE", "desktop_skill"),
-        ALLOWED_REPORTER_MODES,
-    )
-    desktop_report_script = (source.get("DESKTOP_REPORT_SCRIPT") or DEFAULT_DESKTOP_REPORT_SCRIPT).strip()
-    if not desktop_report_script:
-        raise ConfigError("DESKTOP_REPORT_SCRIPT cannot be empty")
-
-    script_path = Path(desktop_report_script)
-    if reporter_mode == "desktop_skill" and not script_path.exists():
-        raise ConfigError(f"Desktop reporter script not found: {desktop_report_script}")
-
     exec_timeout_seconds = _parse_positive_int(
         "EXEC_TIMEOUT_SECONDS",
         source.get("EXEC_TIMEOUT_SECONDS", ""),
         120,
     )
     dry_run = _parse_bool("DRY_RUN", source.get("DRY_RUN", ""), True)
+    approval_mode = _validate_mode(
+        "APPROVAL_MODE",
+        source.get("APPROVAL_MODE", "reaction"),
+        ALLOWED_APPROVAL_MODES,
+    )
+    if approval_mode == "reaction" and listener_mode != "socket":
+        raise ConfigError("APPROVAL_MODE=reaction requires LISTENER_MODE=socket")
+
+    approve_reaction = (source.get("APPROVE_REACTION") or "white_check_mark").strip().strip(":")
+    reject_reaction = (source.get("REJECT_REACTION") or "x").strip().strip(":")
+    if not approve_reaction:
+        raise ConfigError("APPROVE_REACTION cannot be empty")
+    if not reject_reaction:
+        raise ConfigError("REJECT_REACTION cannot be empty")
+    if approve_reaction == reject_reaction:
+        raise ConfigError("APPROVE_REACTION and REJECT_REACTION must be different")
 
     return AppConfig(
         slack_bot_token=slack_bot_token,
+        slack_app_token=slack_app_token,
         command_channel_id=command_channel_id,
         report_channel_id=report_channel_id,
+        listener_mode=listener_mode,
+        socket_read_timeout_seconds=socket_read_timeout_seconds,
         poll_interval=poll_interval,
         poll_batch_size=poll_batch_size,
         trigger_mode=trigger_mode,
         trigger_prefix=trigger_prefix,
         bot_user_id=bot_user_id,
         state_db_path=state_db_path,
-        reporter_mode=reporter_mode,
-        desktop_report_script=desktop_report_script,
         exec_timeout_seconds=exec_timeout_seconds,
         dry_run=dry_run,
+        approval_mode=approval_mode,
+        approve_reaction=approve_reaction,
+        reject_reaction=reject_reaction,
     )

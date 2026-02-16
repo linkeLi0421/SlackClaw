@@ -5,7 +5,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import TERMINAL_TASK_STATUSES, TaskRecord, TaskStatus
+from .models import ApprovalStatus, TERMINAL_TASK_STATUSES, TaskApprovalRecord, TaskRecord, TaskStatus
 
 
 def _utc_now() -> str:
@@ -60,6 +60,23 @@ class StateStore:
               task_id TEXT NOT NULL,
               acquired_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS task_approvals (
+              task_id TEXT PRIMARY KEY,
+              channel_id TEXT NOT NULL,
+              source_message_ts TEXT NOT NULL,
+              approval_message_ts TEXT NOT NULL,
+              approve_reaction TEXT NOT NULL,
+              reject_reaction TEXT NOT NULL,
+              status TEXT NOT NULL,
+              decided_by TEXT NOT NULL,
+              decision_reaction TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_approvals_lookup
+              ON task_approvals(channel_id, source_message_ts, approval_message_ts, status);
             """
         )
         self._conn.commit()
@@ -192,3 +209,156 @@ class StateStore:
             (lock_key, task_id),
         )
         self._conn.commit()
+
+    def upsert_task_approval(
+        self,
+        *,
+        task_id: str,
+        channel_id: str,
+        source_message_ts: str,
+        approval_message_ts: str,
+        approve_reaction: str,
+        reject_reaction: str,
+        status: ApprovalStatus = ApprovalStatus.PENDING,
+    ) -> None:
+        now = _utc_now()
+        self._conn.execute(
+            """
+            INSERT INTO task_approvals(
+              task_id,
+              channel_id,
+              source_message_ts,
+              approval_message_ts,
+              approve_reaction,
+              reject_reaction,
+              status,
+              decided_by,
+              decision_reaction,
+              created_at,
+              updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+              channel_id = excluded.channel_id,
+              source_message_ts = excluded.source_message_ts,
+              approval_message_ts = excluded.approval_message_ts,
+              approve_reaction = excluded.approve_reaction,
+              reject_reaction = excluded.reject_reaction,
+              status = excluded.status,
+              decided_by = excluded.decided_by,
+              decision_reaction = excluded.decision_reaction,
+              updated_at = excluded.updated_at
+            """,
+            (
+                task_id,
+                channel_id,
+                source_message_ts,
+                approval_message_ts,
+                approve_reaction,
+                reject_reaction,
+                status.value,
+                "",
+                "",
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+
+    def get_task_approval(self, task_id: str) -> TaskApprovalRecord | None:
+        row = self._conn.execute(
+            """
+            SELECT
+              task_id,
+              channel_id,
+              source_message_ts,
+              approval_message_ts,
+              approve_reaction,
+              reject_reaction,
+              status,
+              decided_by,
+              decision_reaction,
+              created_at,
+              updated_at
+            FROM task_approvals
+            WHERE task_id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._approval_record_from_row(row)
+
+    def get_pending_approval_for_message(self, channel_id: str, message_ts: str) -> TaskApprovalRecord | None:
+        row = self._conn.execute(
+            """
+            SELECT
+              task_id,
+              channel_id,
+              source_message_ts,
+              approval_message_ts,
+              approve_reaction,
+              reject_reaction,
+              status,
+              decided_by,
+              decision_reaction,
+              created_at,
+              updated_at
+            FROM task_approvals
+            WHERE channel_id = ?
+              AND status = ?
+              AND (source_message_ts = ? OR approval_message_ts = ?)
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (channel_id, ApprovalStatus.PENDING.value, message_ts, message_ts),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._approval_record_from_row(row)
+
+    def resolve_task_approval(
+        self,
+        *,
+        task_id: str,
+        status: ApprovalStatus,
+        decided_by: str,
+        decision_reaction: str,
+    ) -> bool:
+        cur = self._conn.execute(
+            """
+            UPDATE task_approvals
+            SET
+              status = ?,
+              decided_by = ?,
+              decision_reaction = ?,
+              updated_at = ?
+            WHERE task_id = ? AND status = ?
+            """,
+            (
+                status.value,
+                decided_by,
+                decision_reaction,
+                _utc_now(),
+                task_id,
+                ApprovalStatus.PENDING.value,
+            ),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    @staticmethod
+    def _approval_record_from_row(row: sqlite3.Row) -> TaskApprovalRecord:
+        return TaskApprovalRecord(
+            task_id=str(row["task_id"]),
+            channel_id=str(row["channel_id"]),
+            source_message_ts=str(row["source_message_ts"]),
+            approval_message_ts=str(row["approval_message_ts"]),
+            approve_reaction=str(row["approve_reaction"]),
+            reject_reaction=str(row["reject_reaction"]),
+            status=ApprovalStatus(str(row["status"])),
+            decided_by=str(row["decided_by"]),
+            decision_reaction=str(row["decision_reaction"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )

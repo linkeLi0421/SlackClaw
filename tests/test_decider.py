@@ -10,18 +10,22 @@ from slackclaw.models import SlackMessage
 def _config(trigger_mode: str = "prefix", bot_user_id: str = "") -> AppConfig:
     return AppConfig(
         slack_bot_token="xoxb-test",
+        slack_app_token="",
         command_channel_id="C111",
         report_channel_id="C222",
+        listener_mode="poll",
+        socket_read_timeout_seconds=1.0,
         poll_interval=3.0,
         poll_batch_size=100,
         trigger_mode=trigger_mode,
         trigger_prefix="!do",
         bot_user_id=bot_user_id,
         state_db_path="./state.db",
-        reporter_mode="desktop_skill",
-        desktop_report_script="/Users/link/Desktop/slack-web-post/scripts/post_channel.py",
         exec_timeout_seconds=120,
         dry_run=True,
+        approval_mode="none",
+        approve_reaction="white_check_mark",
+        reject_reaction="x",
     )
 
 
