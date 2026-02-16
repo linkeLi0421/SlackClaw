@@ -23,6 +23,10 @@ def _config(trigger_mode: str = "prefix", bot_user_id: str = "") -> AppConfig:
         state_db_path="./state.db",
         exec_timeout_seconds=120,
         dry_run=True,
+        report_input_max_chars=500,
+        report_summary_max_chars=1200,
+        report_details_max_chars=4000,
+        run_mode="approve",
         approval_mode="none",
         approve_reaction="white_check_mark",
         reject_reaction="x",
@@ -83,6 +87,38 @@ class DeciderTests(unittest.TestCase):
         assert decision.task is not None
         self.assertEqual(decision.task.lock_key, "lock:repo-a")
         self.assertEqual(decision.task.command_text, "sh:echo hi")
+
+    def test_simple_shell_command_without_prefix(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="SHELL echo hi", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "sh:echo hi")
+
+    def test_simple_kimi_command_without_prefix(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="KIMI improve repo", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "kimi:improve repo")
+
+    def test_simple_codex_command_without_prefix(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="CODEX fix tests", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "codex:fix tests")
+
+    def test_simple_claude_command_without_prefix(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="CLAUDE review this", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "claude:review this")
 
 
 if __name__ == "__main__":

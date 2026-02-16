@@ -348,6 +348,9 @@ def run(argv: list[str] | None = None) -> int:
     reporter = Reporter(
         report_channel_id=config.report_channel_id,
         client=client,
+        input_max_chars=config.report_input_max_chars,
+        summary_max_chars=config.report_summary_max_chars,
+        details_max_chars=config.report_details_max_chars,
     )
 
     _event(
@@ -359,10 +362,14 @@ def run(argv: list[str] | None = None) -> int:
         poll_batch_size=config.poll_batch_size,
         socket_read_timeout_seconds=config.socket_read_timeout_seconds,
         trigger_mode=config.trigger_mode,
+        run_mode=config.run_mode,
         approval_mode=config.approval_mode,
         approve_reaction=config.approve_reaction,
         reject_reaction=config.reject_reaction,
         dry_run=config.dry_run,
+        report_input_max_chars=config.report_input_max_chars,
+        report_summary_max_chars=config.report_summary_max_chars,
+        report_details_max_chars=config.report_details_max_chars,
         recovered_tasks=recovered,
         auth_user_id=auth.get("user_id"),
         auth_team=auth.get("team"),

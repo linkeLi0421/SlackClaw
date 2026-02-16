@@ -26,6 +26,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.state_db_path, "./state.db")
         self.assertEqual(cfg.exec_timeout_seconds, 120)
         self.assertTrue(cfg.dry_run)
+        self.assertEqual(cfg.report_input_max_chars, 500)
+        self.assertEqual(cfg.report_summary_max_chars, 1200)
+        self.assertEqual(cfg.report_details_max_chars, 4000)
+        self.assertEqual(cfg.run_mode, "approve")
         self.assertEqual(cfg.approval_mode, "reaction")
         self.assertEqual(cfg.approve_reaction, "white_check_mark")
         self.assertEqual(cfg.reject_reaction, "x")
@@ -79,6 +83,20 @@ class ConfigTests(unittest.TestCase):
         env = dict(self.base_env)
         env["LISTENER_MODE"] = "poll"
         env["APPROVAL_MODE"] = "reaction"
+        with self.assertRaises(ConfigError):
+            load_config(env)
+
+    def test_run_mode_disables_approval(self) -> None:
+        env = dict(self.base_env)
+        env["RUN_MODE"] = "run"
+        env["APPROVAL_MODE"] = "reaction"
+        cfg = load_config(env)
+        self.assertEqual(cfg.run_mode, "run")
+        self.assertEqual(cfg.approval_mode, "none")
+
+    def test_invalid_report_limit_raises(self) -> None:
+        env = dict(self.base_env)
+        env["REPORT_DETAILS_MAX_CHARS"] = "0"
         with self.assertRaises(ConfigError):
             load_config(env)
 

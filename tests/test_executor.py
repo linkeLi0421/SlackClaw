@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from subprocess import CompletedProcess
 from unittest.mock import patch
 
 from slackclaw.executor import TaskExecutor
@@ -48,6 +49,48 @@ class ExecutorTests(unittest.TestCase):
             result = executor.execute(_task("sh:sleep 10"))
         self.assertEqual(result.status, TaskStatus.FAILED)
         self.assertIn("timed out", result.summary)
+
+    def test_kimi_command_success(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        with patch("slackclaw.executor.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=["kimi", "--quiet", "-p", "who are you"],
+                returncode=0,
+                stdout="I am kimi\n",
+                stderr="",
+            )
+            result = executor.execute(_task("kimi:who are you"))
+        self.assertEqual(result.status, TaskStatus.SUCCEEDED)
+        self.assertEqual(result.summary, "kimi command completed")
+        self.assertIn("I am kimi", result.details)
+
+    def test_codex_command_success(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        with patch("slackclaw.executor.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=["codex", "exec", "--skip-git-repo-check", "-C", "/tmp", "fix tests"],
+                returncode=0,
+                stdout="codex done\n",
+                stderr="",
+            )
+            result = executor.execute(_task("codex:fix tests"))
+        self.assertEqual(result.status, TaskStatus.SUCCEEDED)
+        self.assertEqual(result.summary, "codex command completed")
+        self.assertIn("codex done", result.details)
+
+    def test_claude_command_success(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        with patch("slackclaw.executor.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=["claude", "code", "review this repo"],
+                returncode=0,
+                stdout="claude done\n",
+                stderr="",
+            )
+            result = executor.execute(_task("claude:review this repo"))
+        self.assertEqual(result.status, TaskStatus.SUCCEEDED)
+        self.assertEqual(result.summary, "claude command completed")
+        self.assertIn("claude done", result.details)
 
 
 if __name__ == "__main__":

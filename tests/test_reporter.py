@@ -52,6 +52,38 @@ class ReporterTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             reporter.report(self._task(), result)
 
+    def test_report_truncation_uses_configurable_limits(self) -> None:
+        client = FakeClient()
+        reporter = Reporter(
+            client=client,
+            report_channel_id="C_REPORT",
+            input_max_chars=8,
+            summary_max_chars=10,
+            details_max_chars=12,
+        )
+        task = self._task()
+        task = TaskSpec(
+            task_id=task.task_id,
+            channel_id=task.channel_id,
+            message_ts=task.message_ts,
+            trigger_user=task.trigger_user,
+            trigger_text=task.trigger_text,
+            command_text="abcdefghijklmno",
+            lock_key=task.lock_key,
+        )
+        result = TaskExecutionResult(
+            status=TaskStatus.SUCCEEDED,
+            summary="0123456789ABCDEF",
+            details="zzzzzzzzzzzzzzzzzz",
+        )
+
+        reporter.report(task, result)
+
+        _channel, text = client.calls[0]
+        self.assertIn("input: abcde...", text)
+        self.assertIn("summary: 0123456...", text)
+        self.assertIn("details: zzzzzzzzz...", text)
+
 
 if __name__ == "__main__":
     unittest.main()

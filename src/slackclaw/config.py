@@ -8,6 +8,10 @@ from typing import Mapping
 ALLOWED_TRIGGER_MODES = {"prefix", "mention"}
 ALLOWED_LISTENER_MODES = {"poll", "socket"}
 ALLOWED_APPROVAL_MODES = {"none", "reaction"}
+ALLOWED_RUN_MODES = {"approve", "run"}
+DEFAULT_REPORT_INPUT_MAX_CHARS = 500
+DEFAULT_REPORT_SUMMARY_MAX_CHARS = 1200
+DEFAULT_REPORT_DETAILS_MAX_CHARS = 4000
 
 
 class ConfigError(ValueError):
@@ -30,6 +34,10 @@ class AppConfig:
     state_db_path: str
     exec_timeout_seconds: int
     dry_run: bool
+    report_input_max_chars: int
+    report_summary_max_chars: int
+    report_details_max_chars: int
+    run_mode: str
     approval_mode: str
     approve_reaction: str
     reject_reaction: str
@@ -132,11 +140,29 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         120,
     )
     dry_run = _parse_bool("DRY_RUN", source.get("DRY_RUN", ""), True)
+    report_input_max_chars = _parse_positive_int(
+        "REPORT_INPUT_MAX_CHARS",
+        source.get("REPORT_INPUT_MAX_CHARS", ""),
+        DEFAULT_REPORT_INPUT_MAX_CHARS,
+    )
+    report_summary_max_chars = _parse_positive_int(
+        "REPORT_SUMMARY_MAX_CHARS",
+        source.get("REPORT_SUMMARY_MAX_CHARS", ""),
+        DEFAULT_REPORT_SUMMARY_MAX_CHARS,
+    )
+    report_details_max_chars = _parse_positive_int(
+        "REPORT_DETAILS_MAX_CHARS",
+        source.get("REPORT_DETAILS_MAX_CHARS", ""),
+        DEFAULT_REPORT_DETAILS_MAX_CHARS,
+    )
+    run_mode = _validate_mode("RUN_MODE", source.get("RUN_MODE", "approve"), ALLOWED_RUN_MODES)
     approval_mode = _validate_mode(
         "APPROVAL_MODE",
         source.get("APPROVAL_MODE", "reaction"),
         ALLOWED_APPROVAL_MODES,
     )
+    if run_mode == "run":
+        approval_mode = "none"
     if approval_mode == "reaction" and listener_mode != "socket":
         raise ConfigError("APPROVAL_MODE=reaction requires LISTENER_MODE=socket")
 
@@ -164,6 +190,10 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         state_db_path=state_db_path,
         exec_timeout_seconds=exec_timeout_seconds,
         dry_run=dry_run,
+        report_input_max_chars=report_input_max_chars,
+        report_summary_max_chars=report_summary_max_chars,
+        report_details_max_chars=report_details_max_chars,
+        run_mode=run_mode,
         approval_mode=approval_mode,
         approve_reaction=approve_reaction,
         reject_reaction=reject_reaction,

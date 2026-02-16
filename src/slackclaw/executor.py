@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 
 from .models import TaskExecutionResult, TaskSpec, TaskStatus
@@ -19,6 +20,36 @@ class TaskExecutor:
             )
 
         command = task.command_text
+        if command.startswith("codex:"):
+            prompt = command[6:].strip()
+            if not prompt:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary="invalid codex command: empty prompt",
+                    details="use format: codex:<prompt> or Slack message `CODEX <prompt>`",
+                )
+            return self._run_codex(prompt)
+
+        if command.startswith("claude:"):
+            prompt = command[7:].strip()
+            if not prompt:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary="invalid claude command: empty prompt",
+                    details="use format: claude:<prompt> or Slack message `CLAUDE <prompt>`",
+                )
+            return self._run_claude(prompt)
+
+        if command.startswith("kimi:"):
+            prompt = command[5:].strip()
+            if not prompt:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary="invalid kimi command: empty prompt",
+                    details="use format: kimi:<prompt> or Slack message `KIMI <prompt>`",
+                )
+            return self._run_kimi(prompt)
+
         if command.startswith("sh:"):
             shell_cmd = command[3:].strip()
             if not shell_cmd:
@@ -70,5 +101,116 @@ class TaskExecutor:
         return TaskExecutionResult(
             status=TaskStatus.FAILED,
             summary=f"shell command exited with code {completed.returncode}",
+            details=details or "<no output>",
+        )
+
+    def _run_kimi(self, prompt: str) -> TaskExecutionResult:
+        try:
+            completed = subprocess.run(
+                ["kimi", "--quiet", "-p", prompt],
+                text=True,
+                capture_output=True,
+                timeout=self._timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"kimi command timed out after {self._timeout_seconds}s",
+                details=prompt,
+            )
+        except Exception as exc:  # pragma: no cover - OS-level failures
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"kimi execution failed: {exc}",
+                details=prompt,
+            )
+
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        details = "\n".join(part for part in [stdout, stderr] if part)
+        if completed.returncode == 0:
+            return TaskExecutionResult(
+                status=TaskStatus.SUCCEEDED,
+                summary="kimi command completed",
+                details=details or "<no output>",
+            )
+        return TaskExecutionResult(
+            status=TaskStatus.FAILED,
+            summary=f"kimi command exited with code {completed.returncode}",
+            details=details or "<no output>",
+        )
+
+    def _run_codex(self, prompt: str) -> TaskExecutionResult:
+        try:
+            completed = subprocess.run(
+                ["codex", "exec", "--skip-git-repo-check", "-C", os.getcwd(), prompt],
+                text=True,
+                capture_output=True,
+                timeout=self._timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"codex command timed out after {self._timeout_seconds}s",
+                details=prompt,
+            )
+        except Exception as exc:  # pragma: no cover - OS-level failures
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"codex execution failed: {exc}",
+                details=prompt,
+            )
+
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        details = "\n".join(part for part in [stdout, stderr] if part)
+        if completed.returncode == 0:
+            return TaskExecutionResult(
+                status=TaskStatus.SUCCEEDED,
+                summary="codex command completed",
+                details=details or "<no output>",
+            )
+        return TaskExecutionResult(
+            status=TaskStatus.FAILED,
+            summary=f"codex command exited with code {completed.returncode}",
+            details=details or "<no output>",
+        )
+
+    def _run_claude(self, prompt: str) -> TaskExecutionResult:
+        try:
+            completed = subprocess.run(
+                ["claude", "code", prompt],
+                text=True,
+                capture_output=True,
+                timeout=self._timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"claude command timed out after {self._timeout_seconds}s",
+                details=prompt,
+            )
+        except Exception as exc:  # pragma: no cover - OS-level failures
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"claude execution failed: {exc}",
+                details=prompt,
+            )
+
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        details = "\n".join(part for part in [stdout, stderr] if part)
+        if completed.returncode == 0:
+            return TaskExecutionResult(
+                status=TaskStatus.SUCCEEDED,
+                summary="claude command completed",
+                details=details or "<no output>",
+            )
+        return TaskExecutionResult(
+            status=TaskStatus.FAILED,
+            summary=f"claude command exited with code {completed.returncode}",
             details=details or "<no output>",
         )

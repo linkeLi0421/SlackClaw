@@ -9,6 +9,10 @@ from .models import SlackMessage, TaskSpec
 
 _SHELL_CD_RE = re.compile(r"^\s*sh:\s*cd\s+([^\s;&]+)")
 _LOCK_PREFIX_RE = re.compile(r"^lock:([^\s]+)\s+(.*)$")
+_SIMPLE_SHELL_RE = re.compile(r"^shell\s+(.+)$", re.IGNORECASE)
+_SIMPLE_KIMI_RE = re.compile(r"^kimi\s+(.+)$", re.IGNORECASE)
+_SIMPLE_CODEX_RE = re.compile(r"^codex\s+(.+)$", re.IGNORECASE)
+_SIMPLE_CLAUDE_RE = re.compile(r"^claude\s+(.+)$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,34 @@ def _extract_lock_key(command_text: str) -> tuple[str, str]:
     return "global", command_text
 
 
+def _parse_simple_command(text: str) -> str | None:
+    shell_match = _SIMPLE_SHELL_RE.match(text)
+    if shell_match:
+        command = shell_match.group(1).strip()
+        if command:
+            return f"sh:{command}"
+
+    kimi_match = _SIMPLE_KIMI_RE.match(text)
+    if kimi_match:
+        prompt = kimi_match.group(1).strip()
+        if prompt:
+            return f"kimi:{prompt}"
+
+    codex_match = _SIMPLE_CODEX_RE.match(text)
+    if codex_match:
+        prompt = codex_match.group(1).strip()
+        if prompt:
+            return f"codex:{prompt}"
+
+    claude_match = _SIMPLE_CLAUDE_RE.match(text)
+    if claude_match:
+        prompt = claude_match.group(1).strip()
+        if prompt:
+            return f"claude:{prompt}"
+
+    return None
+
+
 def decide_message(config: AppConfig, message: SlackMessage) -> Decision:
     subtype = str(message.raw.get("subtype") or "")
     if subtype:
@@ -58,18 +90,19 @@ def decide_message(config: AppConfig, message: SlackMessage) -> Decision:
     if not text:
         return Decision(should_run=False, reason="ignored empty text", task=None)
 
-    command_text = ""
-    if config.trigger_mode == "prefix":
-        if not text.startswith(config.trigger_prefix):
-            return Decision(should_run=False, reason="no prefix trigger", task=None)
-        command_text = text[len(config.trigger_prefix) :].strip()
-    elif config.trigger_mode == "mention":
-        matched, remainder = _starts_with_mention(text, config.bot_user_id)
-        if not matched:
-            return Decision(should_run=False, reason="no mention trigger", task=None)
-        command_text = remainder
-    else:
-        return Decision(should_run=False, reason="unsupported trigger mode", task=None)
+    command_text = _parse_simple_command(text)
+    if not command_text:
+        if config.trigger_mode == "prefix":
+            if not text.startswith(config.trigger_prefix):
+                return Decision(should_run=False, reason="no prefix trigger", task=None)
+            command_text = text[len(config.trigger_prefix) :].strip()
+        elif config.trigger_mode == "mention":
+            matched, remainder = _starts_with_mention(text, config.bot_user_id)
+            if not matched:
+                return Decision(should_run=False, reason="no mention trigger", task=None)
+            command_text = remainder
+        else:
+            return Decision(should_run=False, reason="unsupported trigger mode", task=None)
 
     if not command_text:
         return Decision(should_run=False, reason="empty command after trigger", task=None)
