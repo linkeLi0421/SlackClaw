@@ -2,14 +2,6 @@
 
 Local resident Slack agent for command-channel task execution with dedupe, locking, reporting, and optional reaction approval.
 
-## Features (M1-M5)
-- M1: config loader, SQLite state store, startup entrypoint.
-- M2: polling listener, explicit trigger decider, dedupe, FIFO queue.
-- M3: executor + reporter integration with standardized result messages.
-- M4: execution locks, dry-run default, restart recovery, 429 retry.
-- M5: Socket Mode listener + plan-then-approve flow via reactions.
-- Image attachments in command messages are downloaded and passed to executors (with safety limits).
-
 ## Requirements
 - Python 3.11+
 - `pip install -r requirements.txt`
@@ -218,19 +210,13 @@ This project can execute local shell commands. Keep these protections enabled:
 1. Keep approval on:
    - `APPROVAL_MODE=reaction`
    - Only react `:white_check_mark:` after reviewing the plan message.
-2. Limit command surface:
-   - Prefer calling reviewed wrapper scripts instead of arbitrary shell payloads.
-   - Example: `!do sh:/absolute/path/to/repo/scripts/run_claude_task.sh`.
-3. Keep execution scoped:
-   - Use explicit `cd /path/to/repo` in commands.
-   - Use lock prefix for shared repos: `!do lock:repo-a sh:cd /repo-a && ...`.
-4. Start safe, then expand:
+2. Start safe, then expand:
    - Test with `DRY_RUN=true` first.
    - Switch to `DRY_RUN=false` only after command flow is verified.
-5. Set timeouts and monitor reports:
+3. Set timeouts and monitor reports:
    - Keep `EXEC_TIMEOUT_SECONDS` reasonable.
    - Watch report channel for failures, lock conflicts, or unexpected output.
-6. Never run privileged or destructive commands from Slack:
+4. Never run privileged or destructive commands from Slack:
    - Avoid `sudo`, filesystem wipes, credential dumps, and production-impacting commands.
 
 ## Test
