@@ -1,43 +1,46 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/slackclaw/`: runtime code for polling, decisioning, execution, reporting, and app orchestration.
-- `tests/`: `unittest`-based test suite (for example `test_decider.py`, `test_listener_incremental.py`).
-- `scripts/run_agent.sh`: local entrypoint; sets `PYTHONPATH=src` then runs `python3 -m slackclaw.app`.
-- `docs/`: design and implementation notes.
-
-Keep new modules under `src/slackclaw/` and mirror test files in `tests/` as `test_<module>.py`.
+- `src/slackclaw/` contains runtime modules:
+  - `app.py` orchestration loop, approval flow, attachment prep
+  - `decider.py` trigger parsing (`SHELL`, `KIMI`, `CODEX`, `CLAUDE`, prefix/mention)
+  - `executor.py` command execution and agent integrations
+  - `listener.py`, `slack_api.py`, `state_store.py`, `reporter.py`
+- `tests/` mirrors runtime behavior with `unittest` files like `test_executor.py`, `test_app_images.py`.
+- `scripts/run_agent.sh` is the local entrypoint.
+- Runtime artifacts (`state.db*`, `.slackclaw_attachments/`, logs) are local-only and must stay untracked.
 
 ## Build, Test, and Development Commands
-- `PYTHONPATH=src python3 -m unittest discover -s tests -v`: run all tests.
-- `./scripts/run_agent.sh --once`: run one poll/execute cycle for local validation.
-- `./scripts/run_agent.sh`: start the long-running agent loop.
-
-There is no packaging/build pipeline yet; focus on runnable source and passing tests.
+- `pip install -r requirements.txt`: install dependencies.
+- `./scripts/run_agent.sh --once`: run one cycle for validation.
+- `./scripts/run_agent.sh`: run continuously.
+- `PYTHONPATH=src python3 -m unittest discover -s tests -v`: run full test suite.
 
 ## Coding Style & Naming Conventions
-- Follow Python 3.11+ style with 4-space indentation and PEP 8 naming.
-- Use type hints consistently (`list[str]`, dataclasses, explicit return types), matching existing code.
-- Use `snake_case` for functions/variables, `PascalCase` for classes, and `UPPER_SNAKE_CASE` for constants.
-- Keep functions focused and side-effect boundaries clear (for example, Slack I/O in `slack_api.py`, persistence in `state_store.py`).
-
-No formatter/linter is configured in-repo yet; keep style consistent with current files.
+- Target Python 3.11+, 4-space indentation, PEP 8 naming.
+- Use type hints consistently (`tuple[str, ...]`, `list[dict]`, explicit returns).
+- Keep dataclasses immutable where practical (`@dataclass(frozen=True)` pattern used across models).
+- Keep I/O boundaries clear:
+  - Slack HTTP/WebSocket logic in `slack_api.py`/`listener.py`
+  - persistence in `state_store.py`
+  - execution side effects in `executor.py`
 
 ## Testing Guidelines
-- Framework: standard library `unittest`.
-- Name tests `test_<behavior>` and files `test_<module>.py`.
-- Add or update tests for each behavior change, especially around dedupe, locks, config validation, and reporting paths.
-- Run full suite before opening a PR: `PYTHONPATH=src python3 -m unittest discover -s tests -v`.
+- Use standard `unittest`; file names must be `test_<module>.py`.
+- Add tests for each behavior change and failure path, not just success paths.
+- When changing Slack-visible output, update reporter tests.
+- When changing command parsing or task payload shape, update decider/app/state tests.
 
 ## Commit & Pull Request Guidelines
-- Git history is currently empty, so no established commit pattern exists yet.
-- Use imperative, scoped commit messages (recommended: Conventional Commits), e.g. `feat(decider): support lock key parsing`.
+- Follow existing history style: Conventional Commit-like subjects, e.g. `feat: ...`, `fix: ...`.
+- Keep commits scoped to one behavior change.
 - PRs should include:
-  - clear summary of behavior change,
-  - linked issue/task (if any),
-  - test evidence (command + result),
-  - sample Slack/report output when behavior changes user-visible messaging.
+  - behavior summary
+  - config/scope changes (for example `files:read`)
+  - test command and result
+  - sample Slack output when user-visible formatting changes
 
 ## Security & Configuration Tips
-- Configure secrets via environment variables (`SLACK_BOT_TOKEN`, channel IDs); never commit tokens.
-- Keep local runtime artifacts (for example `state.db`, logs, `__pycache__/`) out of commits.
+- Never commit tokens or real `.env` values.
+- For attachment workflows, ensure Slack bot scope `files:read` is present.
+- Treat `sh:` commands as privileged; prefer `APPROVAL_MODE=reaction` outside local experiments.

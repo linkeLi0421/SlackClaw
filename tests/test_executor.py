@@ -12,7 +12,7 @@ from slackclaw.models import TaskSpec, TaskStatus
 from slackclaw.state_store import StateStore
 
 
-def _task(command_text: str) -> TaskSpec:
+def _task(command_text: str, *, image_paths: tuple[str, ...] = ()) -> TaskSpec:
     return TaskSpec(
         task_id="task-1",
         channel_id="C111",
@@ -22,6 +22,7 @@ def _task(command_text: str) -> TaskSpec:
         trigger_text="!do x",
         command_text=command_text,
         lock_key="global",
+        image_paths=image_paths,
     )
 
 
@@ -38,6 +39,24 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, TaskStatus.SUCCEEDED)
         self.assertEqual(result.summary, "shell command completed")
         self.assertIn("ok", result.details)
+
+    def test_shell_command_receives_image_env_vars(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        with patch("slackclaw.executor.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=["sh"],
+                returncode=0,
+                stdout="ok\n",
+                stderr="",
+            )
+            result = executor.execute(_task("sh:echo hi", image_paths=("/tmp/a.png", "/tmp/b.jpg")))
+
+        self.assertEqual(result.status, TaskStatus.SUCCEEDED)
+        kwargs = mock_run.call_args.kwargs
+        env = kwargs.get("env") or {}
+        self.assertEqual(env.get("SLACKCLAW_IMAGE_COUNT"), "2")
+        self.assertIn("/tmp/a.png", str(env.get("SLACKCLAW_IMAGE_PATHS", "")))
+        self.assertIn("/tmp/b.jpg", str(env.get("SLACKCLAW_IMAGE_PATHS", "")))
 
     def test_shell_prefix_with_empty_payload_fails(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
@@ -68,6 +87,21 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, TaskStatus.SUCCEEDED)
         self.assertEqual(result.summary, "kimi command completed")
         self.assertIn("I am kimi", result.details)
+
+    def test_kimi_prompt_includes_attached_image_paths(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        with patch("slackclaw.executor.subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(
+                args=["kimi"],
+                returncode=0,
+                stdout="ok\n",
+                stderr="",
+            )
+            _ = executor.execute(_task("kimi:describe image", image_paths=("/tmp/screen.png",)))
+
+        prompt_arg = mock_run.call_args.args[0][-1]
+        self.assertIn("Attached image file paths available on local disk", prompt_arg)
+        self.assertIn("/tmp/screen.png", prompt_arg)
 
     def test_codex_command_success(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)

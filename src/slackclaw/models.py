@@ -57,6 +57,7 @@ class TaskSpec:
     trigger_text: str
     command_text: str
     lock_key: str
+    image_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

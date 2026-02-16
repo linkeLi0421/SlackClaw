@@ -83,7 +83,7 @@ def _parse_simple_command(text: str) -> str | None:
 
 def decide_message(config: AppConfig, message: SlackMessage) -> Decision:
     subtype = str(message.raw.get("subtype") or "")
-    if subtype:
+    if subtype and subtype != "file_share":
         return Decision(should_run=False, reason=f"ignored subtype={subtype}", task=None)
 
     text = message.text.strip()

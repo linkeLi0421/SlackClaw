@@ -78,7 +78,7 @@ class TaskExecutor:
                     summary="invalid shell command: empty payload",
                     details="use format: sh:<command>",
                 )
-            return self._run_shell(shell_cmd)
+            return self._run_shell(shell_cmd, task=task)
 
         return TaskExecutionResult(
             status=TaskStatus.SUCCEEDED,
@@ -86,7 +86,12 @@ class TaskExecutor:
             details=f"received command text: {task.command_text}",
         )
 
-    def _run_shell(self, command: str) -> TaskExecutionResult:
+    def _run_shell(self, command: str, *, task: TaskSpec) -> TaskExecutionResult:
+        env = os.environ.copy()
+        if task.image_paths:
+            joined = "\n".join(task.image_paths)
+            env["SLACKCLAW_IMAGE_PATHS"] = joined
+            env["SLACKCLAW_IMAGE_COUNT"] = str(len(task.image_paths))
         try:
             completed = subprocess.run(
                 command,
@@ -95,6 +100,7 @@ class TaskExecutor:
                 capture_output=True,
                 timeout=self._timeout_seconds,
                 check=False,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return TaskExecutionResult(
@@ -360,6 +366,14 @@ class TaskExecutor:
                     f"{context}\n\n"
                     f"Current request:\n{prompt}"
                 )
+
+        if task.image_paths:
+            image_list = "\n".join(f"- {path}" for path in task.image_paths)
+            base_prompt = (
+                f"{base_prompt}\n\n"
+                "Attached image file paths available on local disk:\n"
+                f"{image_list}"
+            )
 
         if not self._response_format_instruction:
             return base_prompt

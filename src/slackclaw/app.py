@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import signal
 import sys
 import time
 import traceback
+from dataclasses import replace
+from pathlib import Path
 
 from .config import AppConfig, ConfigError, load_config
 from .decider import decide_message
@@ -19,6 +22,10 @@ from .state_store import StateStore
 
 
 CHECKPOINT_KEY_PREFIX = "last_ts"
+ATTACHMENTS_BASE_DIR = ".slackclaw_attachments"
+MAX_IMAGE_FILES_PER_TASK = 4
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -40,6 +47,99 @@ def _checkpoint_key(channel_id: str) -> str:
     return f"{CHECKPOINT_KEY_PREFIX}:{channel_id}"
 
 
+def _sanitize_filename(name: str, fallback: str) -> str:
+    cleaned = _SAFE_FILENAME_RE.sub("_", (name or "").strip())
+    cleaned = cleaned.strip("._")
+    return cleaned or fallback
+
+
+def _guess_extension(filename: str, mimetype: str) -> str:
+    suffix = Path(filename or "").suffix
+    if suffix:
+        return suffix
+    normalized = (mimetype or "").strip().lower()
+    if normalized == "image/png":
+        return ".png"
+    if normalized in {"image/jpeg", "image/jpg"}:
+        return ".jpg"
+    if normalized == "image/gif":
+        return ".gif"
+    if normalized == "image/webp":
+        return ".webp"
+    return ".img"
+
+
+def _extract_image_entries(message: SlackMessage) -> list[dict]:
+    raw_files = message.raw.get("files") or []
+    if not isinstance(raw_files, list):
+        return []
+    image_entries: list[dict] = []
+    for raw in raw_files:
+        if not isinstance(raw, dict):
+            continue
+        mimetype = str(raw.get("mimetype") or "").strip().lower()
+        if not mimetype.startswith("image/"):
+            continue
+        url = str(raw.get("url_private_download") or raw.get("url_private") or "").strip()
+        if not url:
+            continue
+        raw_size = raw.get("size")
+        try:
+            size_bytes = max(0, int(raw_size))
+        except Exception:
+            size_bytes = 0
+        image_entries.append(
+            {
+                "id": str(raw.get("id") or ""),
+                "name": str(raw.get("name") or ""),
+                "mimetype": mimetype,
+                "url": url,
+                "size_bytes": size_bytes,
+            }
+        )
+    return image_entries
+
+
+def _materialize_task_images(task: TaskSpec, *, message: SlackMessage, client: SlackWebClient) -> TaskSpec:
+    image_entries = _extract_image_entries(message)
+    if not image_entries:
+        return task
+
+    output_dir = Path(ATTACHMENTS_BASE_DIR) / task.task_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    image_paths: list[str] = []
+    for index, entry in enumerate(image_entries[:MAX_IMAGE_FILES_PER_TASK], start=1):
+        size_bytes = int(entry["size_bytes"])
+        if size_bytes > MAX_IMAGE_BYTES:
+            raise RuntimeError(
+                f"image '{entry['name'] or entry['id'] or index}' exceeds {MAX_IMAGE_BYTES} bytes limit"
+            )
+
+        try:
+            payload = client.download_private_file(str(entry["url"]))
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to download image '{entry['name'] or entry['id'] or index}': {exc}"
+            ) from exc
+
+        if len(payload) > MAX_IMAGE_BYTES:
+            raise RuntimeError(
+                f"downloaded image '{entry['name'] or entry['id'] or index}' exceeds {MAX_IMAGE_BYTES} bytes limit"
+            )
+
+        filename = str(entry["name"] or entry["id"] or f"image_{index:02d}")
+        stem = _sanitize_filename(Path(filename).stem, f"image_{index:02d}")
+        ext = _guess_extension(filename, str(entry["mimetype"]))
+        path = output_dir / f"{index:02d}_{stem}{ext}"
+        path.write_bytes(payload)
+        image_paths.append(str(path.resolve()))
+
+    if not image_paths:
+        return task
+    return replace(task, image_paths=tuple(image_paths))
+
+
 def _task_payload(task: TaskSpec) -> dict:
     return {
         "channel_id": task.channel_id,
@@ -49,6 +149,7 @@ def _task_payload(task: TaskSpec) -> dict:
         "trigger_text": task.trigger_text,
         "command_text": task.command_text,
         "lock_key": task.lock_key,
+        "image_paths": list(task.image_paths),
     }
 
 
@@ -56,6 +157,11 @@ def _task_from_payload(task_id: str, payload: dict) -> TaskSpec | None:
     try:
         message_ts = str(payload["message_ts"])
         thread_ts = str(payload.get("thread_ts") or message_ts)
+        raw_image_paths = payload.get("image_paths") or []
+        image_paths: tuple[str, ...] = ()
+        if isinstance(raw_image_paths, list):
+            normalized = [str(path).strip() for path in raw_image_paths if str(path).strip()]
+            image_paths = tuple(normalized)
         return TaskSpec(
             task_id=task_id,
             channel_id=str(payload["channel_id"]),
@@ -65,23 +171,24 @@ def _task_from_payload(task_id: str, payload: dict) -> TaskSpec | None:
             trigger_text=str(payload["trigger_text"]),
             command_text=str(payload["command_text"]),
             lock_key=str(payload["lock_key"]),
+            image_paths=image_paths,
         )
     except Exception:
         return None
 
 
 def _approval_plan_text(config: AppConfig, task: TaskSpec) -> str:
-    return "\n".join(
-        [
-            f"SlackClaw plan for task `{task.task_id}`",
-            f"command: `{task.command_text}`",
-            f"lock: `{task.lock_key}`",
-            (
-                f"React with :{config.approve_reaction}: to run "
-                f"or :{config.reject_reaction}: to cancel."
-            ),
-        ]
+    lines = [
+        f"SlackClaw plan for task `{task.task_id}`",
+        f"command: `{task.command_text}`",
+        f"lock: `{task.lock_key}`",
+    ]
+    if task.image_paths:
+        lines.append(f"images: {len(task.image_paths)} downloaded attachment(s)")
+    lines.append(
+        f"React with :{config.approve_reaction}: to run or :{config.reject_reaction}: to cancel."
     )
+    return "\n".join(lines)
 
 
 def _request_reaction_approval(
@@ -151,6 +258,25 @@ def _process_command_message(
     task = decision.task
     if store.task_exists(task.task_id):
         return 0
+
+    try:
+        task = _materialize_task_images(task, message=message, client=client)
+    except Exception as exc:
+        store.upsert_task(task.task_id, TaskStatus.FAILED, payload=_task_payload(task))
+        result = TaskExecutionResult(
+            status=TaskStatus.FAILED,
+            summary=f"failed to prepare image attachment(s): {exc}",
+            details="Ensure files:read scope is granted and uploaded files are accessible to the bot.",
+        )
+        try:
+            reporter.report(task, result)
+        except Exception as report_exc:
+            _event("report_failed", task_id=task.task_id, error=str(report_exc))
+        _event("task_image_prepare_failed", task_id=task.task_id, error=str(exc))
+        return 0
+
+    if task.image_paths:
+        _event("task_images_prepared", task_id=task.task_id, image_count=len(task.image_paths))
 
     if config.approval_mode == "reaction":
         store.upsert_task(task.task_id, TaskStatus.WAITING_APPROVAL, payload=_task_payload(task))

@@ -8,6 +8,7 @@ Local resident Slack agent for command-channel task execution with dedupe, locki
 - M3: executor + reporter integration with standardized result messages.
 - M4: execution locks, dry-run default, restart recovery, 429 retry.
 - M5: Socket Mode listener + plan-then-approve flow via reactions.
+- Image attachments in command messages are downloaded and passed to executors (with safety limits).
 
 ## Requirements
 - Python 3.11+
@@ -65,6 +66,7 @@ Follow this once per Slack app at `https://api.slack.com/apps`:
      - `chat:write`
      - `channels:history`
      - `groups:history`
+     - `files:read` (required for image attachments)
 6. Install or reinstall app to workspace:
    - Click `Install to Workspace` or `Reinstall`.
 7. Invite bot to channels:
@@ -135,6 +137,27 @@ KIMI how to improve this repo
 CODEX fix failing tests and summarize changes
 CLAUDE review this repository and list top risks
 ```
+
+Image command flow:
+- Upload image(s) with a command in the same message (for example: `KIMI describe this screenshot`).
+- SlackClaw downloads image attachments to `./.slackclaw_attachments/<task_id>/`.
+- For `KIMI`/`CODEX`/`CLAUDE`, local image file paths are appended to the prompt.
+- For `SHELL`, image paths are exposed via env vars:
+  - `SLACKCLAW_IMAGE_PATHS` (newline-delimited)
+  - `SLACKCLAW_IMAGE_COUNT`
+- Limits:
+  - up to 4 image files per task
+  - 20 MB max per image (pre-check and post-download check)
+
+Shell example that reads image env vars:
+```text
+SHELL python3 -c "import os; print(os.getenv('SLACKCLAW_IMAGE_COUNT')); print(os.getenv('SLACKCLAW_IMAGE_PATHS'))"
+```
+
+Troubleshooting image tasks:
+- Ensure `files:read` is granted, then reinstall the Slack app.
+- Confirm the bot is invited to the command channel where the image was posted.
+- Include command text in the same message as the upload; image-only messages are ignored.
 
 SlackClaw maps these automatically:
 - `SHELL <cmd>` -> `sh:<cmd>`

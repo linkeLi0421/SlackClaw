@@ -7,5 +7,6 @@ __pycache__/
 *.sqlite3
 .venv/
 logs/
+.slackclaw_attachments/
 
 .env

@@ -119,3 +119,15 @@ class SlackWebClient:
 
     def apps_connections_open(self, *, app_token: str) -> dict:
         return self.api_call("POST", "apps.connections.open", json_body={}, token=app_token)
+
+    def download_private_file(self, url: str) -> bytes:
+        headers = {"Authorization": f"Bearer {self._token}"}
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", "replace")
+            raise RuntimeError(f"Slack file download failed ({exc.code}): {details}") from exc
+        except Exception as exc:  # pragma: no cover - network exceptions depend on env
+            raise RuntimeError(f"Slack file download request failed: {exc}") from exc

@@ -73,6 +73,20 @@ class DeciderTests(unittest.TestCase):
         self.assertFalse(decision.should_run)
         self.assertIsNone(decision.task)
 
+    def test_file_share_subtype_still_triggers(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(
+            channel_id="C111",
+            ts="1.1",
+            user="U1",
+            text="!do codex:analyze screenshot",
+            raw={"subtype": "file_share"},
+        )
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "codex:analyze screenshot")
+
     def test_lock_prefix_is_extracted(self) -> None:
         cfg = _config(trigger_mode="prefix")
         msg = SlackMessage(
