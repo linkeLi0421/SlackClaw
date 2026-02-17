@@ -1,5 +1,10 @@
 # SlackClaw
 
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+[English](README.md) | [中文](README.zh-CN.md)
+
 Type commands in Slack, run them locally, check reports in Slack.
 
 SlackClaw is a local agent that watches a Slack channel for commands, executes them on your machine, and posts structured reports back to Slack. It supports shell commands and AI agent CLIs (Claude, Codex, Kimi) out of the box.
@@ -241,3 +246,11 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 - Python 3.11+
 - `pip install -r requirements.txt`
+
+## License
+
+MIT. See `LICENSE`.
+
+## Thanks
+
+- https://github.com/korotovsky/slack-mcp-server
