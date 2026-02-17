@@ -9,17 +9,51 @@ Type commands in Slack, run them locally, check reports in Slack.
 
 SlackClaw is a local agent that watches a Slack channel for commands, executes them on your machine, and posts structured reports back to Slack. It supports shell commands and AI agent CLIs (Claude, Codex, Kimi) out of the box.
 
+## Use Prebuilt Binary (Recommended)
+
+Do not build from source for normal use. Use the packaged binary from GitHub Releases and run it directly.
+
+- Download the latest binary for your OS from: `https://github.com/linkeLi0421/slackclaw/releases`
+- Put it under `release/` (or any local path you prefer)
+- Run setup once, then start the app
+
+macOS:
+```bash
+chmod +x ./release/SlackClaw-macos-arm64
+./release/SlackClaw-macos-arm64 --setup
+./release/SlackClaw-macos-arm64
+```
+
+Linux:
+```bash
+chmod +x ./release/SlackClaw-linux-x64
+./release/SlackClaw-linux-x64 --setup
+./release/SlackClaw-linux-x64
+```
+
+Windows (PowerShell):
+```powershell
+.\release\SlackClaw-windows-x64.exe --setup
+.\release\SlackClaw-windows-x64.exe
+```
+
 ## How It Works
 
 ```
 Slack command channel          Your machine             Slack report channel
 ┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
-│ SHELL ls -la    │ ──▶ │ SlackClaw picks up   │ ──▶ │ Formatted report    │
+│ SHELL ls -la    │ ──▶│ SlackClaw picks up   │ ──▶│ Formatted report    │
 │ CLAUDE fix tests│     │ the message, runs it │     │ with status, output │
 │ CODEX refactor  │     │ locally, then posts  │     │ and details         │
 │ KIMI explain    │     │ the result to Slack  │     │                     │
 └─────────────────┘     └──────────────────────┘     └─────────────────────┘
 ```
+
+## Demo
+
+![SlackClaw Demo](assets/demo.gif)
+
+*Type commands in Slack → Run locally → Get reports back in Slack*
 
 1. You type a command in the Slack **command channel**
 2. SlackClaw detects it, optionally waits for emoji approval
@@ -40,19 +74,7 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app:
 
 See [slack-app-setup.md](slack-app-setup.md) for a detailed step-by-step walkthrough.
 
-### 2. Build the App Binary
-
-macOS / Linux:
-```bash
-./scripts/build_app.sh
-```
-
-Windows (PowerShell):
-```powershell
-.\scripts\build_app.ps1
-```
-
-### 3. Run the Packaged App
+### 2. Run the Packaged App (No Source Build)
 
 macOS:
 ```bash
