@@ -51,9 +51,37 @@ Slack command channel          Your machine             Slack report channel
 
 ## Demo
 
-![SlackClaw Demo](assets/demo.gif)
+### 1. Approval Mode for Dangerous Commands
 
-*Type commands in Slack → Run locally → Get reports back in Slack*
+![Approval Mode Demo](assets/demo.gif)
+
+Demonstrates the approval workflow for shell commands. When a potentially dangerous command (like `rm`) is detected, SlackClaw waits for emoji approval (:white_check_mark: or :x:) before execution. Safe commands run automatically based on the allowlist.
+
+*Duration: 10 seconds | Shows: Command input, approval flow, success/failure reports*
+
+---
+
+### 2. Thread Context Sharing
+
+![Thread Context Demo](assets/demo2.gif)
+
+Shows how AI agents (Claude, Codex, Kimi) maintain context within the same Slack thread. Replies in a thread share conversation history, allowing for follow-up questions and iterative workflows.
+
+*Duration: 15 seconds | Shows: Thread replies, context retention, agent responses*
+
+---
+
+### 3. General Task Execution
+
+![General Task Demo](assets/demo3.gif)
+
+A general-purpose task showing Kimi CLI integration. Ask questions, get summaries, or request code improvements — all from Slack and executed locally.
+
+*Duration: 8 seconds | Shows: AI agent interaction, detailed responses, project assistance*
+
+---
+
+**Summary:** Type commands in Slack → Run locally → Get structured reports back in Slack.
 
 1. You type a command in the Slack **command channel**
 2. SlackClaw detects it, optionally waits for emoji approval
