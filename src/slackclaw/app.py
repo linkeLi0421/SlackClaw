@@ -463,6 +463,40 @@ def _finish_task(
     )
 
 
+def _finalize_in_flight(
+    *,
+    in_flight: list[tuple[TaskSpec, cf.Future[TaskExecutionResult]]],
+    store: StateStore,
+    reporter: Reporter,
+    wait: bool,
+) -> int:
+    if not in_flight:
+        return 0
+
+    finished = 0
+    remaining: list[tuple[TaskSpec, cf.Future[TaskExecutionResult]]] = []
+    for task, future in in_flight:
+        if not wait and not future.done():
+            remaining.append((task, future))
+            continue
+        try:
+            try:
+                result = future.result()
+            except Exception as exc:  # pragma: no cover - process-pool failures depend on env
+                result = TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary=f"worker process execution failed: {exc}",
+                    details="task execution did not return a valid result",
+                )
+            _finish_task(task=task, result=result, store=store, reporter=reporter)
+        finally:
+            store.release_execution_lock(task.lock_key, task.task_id)
+        finished += 1
+
+    in_flight[:] = remaining
+    return finished
+
+
 def _drain_queue(
     queue: TaskQueue,
     *,
@@ -471,12 +505,18 @@ def _drain_queue(
     executor: TaskExecutor,
     reporter: Reporter,
     process_pool: cf.ProcessPoolExecutor | None,
-) -> int:
+    in_flight: list[tuple[TaskSpec, cf.Future[TaskExecutionResult]]],
+) -> tuple[int, cf.ProcessPoolExecutor | None]:
+    _finalize_in_flight(in_flight=in_flight, store=store, reporter=reporter, wait=False)
+
     handled = 0
     deferred: list[TaskSpec] = []
-    in_flight: list[tuple[TaskSpec, cf.Future[TaskExecutionResult]]] = []
+    max_parallel = max(1, config.worker_processes)
 
     while True:
+        if process_pool is not None and len(in_flight) >= max_parallel:
+            break
+
         task = queue.dequeue()
         if task is None:
             break
@@ -554,23 +594,9 @@ def _drain_queue(
             continue
         in_flight.append((task, future))
 
-    for task, future in in_flight:
-        try:
-            try:
-                result = future.result()
-            except Exception as exc:  # pragma: no cover - process-pool failures depend on env
-                result = TaskExecutionResult(
-                    status=TaskStatus.FAILED,
-                    summary=f"worker process execution failed: {exc}",
-                    details="task execution did not return a valid result",
-                )
-            _finish_task(task=task, result=result, store=store, reporter=reporter)
-        finally:
-            store.release_execution_lock(task.lock_key, task.task_id)
-
     for task in deferred:
         queue.enqueue(task)
-    return handled
+    return handled, process_pool
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -625,6 +651,7 @@ def run(argv: list[str] | None = None) -> int:
     process_pool: cf.ProcessPoolExecutor | None = None
     if config.worker_processes > 1:
         process_pool = cf.ProcessPoolExecutor(max_workers=config.worker_processes)
+    in_flight: list[tuple[TaskSpec, cf.Future[TaskExecutionResult]]] = []
     reporter = Reporter(
         report_channel_id=config.report_channel_id,
         client=client,
@@ -721,13 +748,14 @@ def run(argv: list[str] | None = None) -> int:
                 )
             enqueued += approved
 
-            handled = _drain_queue(
+            handled, process_pool = _drain_queue(
                 queue,
                 config=config,
                 store=store,
                 executor=executor,
                 reporter=reporter,
                 process_pool=process_pool,
+                in_flight=in_flight,
             )
             elapsed_ms = int((time.time() - cycle_started) * 1000)
             _event(
@@ -738,17 +766,20 @@ def run(argv: list[str] | None = None) -> int:
                 approved=approved,
                 handled=handled,
                 queue_size=len(queue),
+                in_flight=len(in_flight),
                 elapsed_ms=elapsed_ms,
                 last_ts=last_ts,
             )
 
             if args.once:
+                _finalize_in_flight(in_flight=in_flight, store=store, reporter=reporter, wait=True)
                 break
             if config.listener_mode == "poll":
                 time.sleep(config.poll_interval)
     finally:
         if socket_listener is not None:
             socket_listener.close()
+        _finalize_in_flight(in_flight=in_flight, store=store, reporter=reporter, wait=True)
         if process_pool is not None:
             process_pool.shutdown(wait=True)
         store.close()
