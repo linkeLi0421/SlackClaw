@@ -9,10 +9,10 @@ SlackClaw is a local agent that watches a Slack channel for commands, executes t
 ```
 Slack command channel          Your machine             Slack report channel
 ┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
-│ SHELL ls -la     │ ──▶ │ SlackClaw picks up   │ ──▶ │ Formatted report    │
-│ CLAUDE fix tests │     │ the message, runs it │     │ with status, output │
-│ CODEX refactor   │     │ locally, then posts  │     │ and details         │
-│ KIMI explain     │     │ the result to Slack  │     │                     │
+│ SHELL ls -la    │ ──▶ │ SlackClaw picks up   │ ──▶ │ Formatted report    │
+│ CLAUDE fix tests│     │ the message, runs it │     │ with status, output │
+│ CODEX refactor  │     │ locally, then posts  │     │ and details         │
+│ KIMI explain    │     │ the result to Slack  │     │                     │
 └─────────────────┘     └──────────────────────┘     └─────────────────────┘
 ```
 
@@ -33,19 +33,38 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app:
 - **Install** the app to your workspace
 - **Invite** the bot to your command and report channels: `/invite @your-bot`
 
-See [docs/slack-app-setup.md](docs/slack-app-setup.md) for a detailed step-by-step walkthrough.
+See [slack-app-setup.md](slack-app-setup.md) for a detailed step-by-step walkthrough.
 
 ### 2. Build the App Binary
 
+macOS / Linux:
 ```bash
 ./scripts/build_app.sh
 ```
 
+Windows (PowerShell):
+```powershell
+.\scripts\build_app.ps1
+```
+
 ### 3. Run the Packaged App
 
+macOS:
 ```bash
 ./release/SlackClaw-macos-arm64 --setup
 ./release/SlackClaw-macos-arm64
+```
+
+Linux:
+```bash
+./release/SlackClaw-linux-x64 --setup
+./release/SlackClaw-linux-x64
+```
+
+Windows (PowerShell):
+```powershell
+.\release\SlackClaw-windows-x64.exe --setup
+.\release\SlackClaw-windows-x64.exe
 ```
 
 On first run, SlackClaw opens a local setup page in your browser. Save Slack tokens/channel IDs there, then the app starts.
@@ -160,11 +179,24 @@ CLAUDE, CODEX, and KIMI commands are thread-aware:
 
 ## Packaging
 
-Build a standalone binary:
+Build a standalone binary on your target OS:
 
+macOS / Linux:
 ```bash
 ./scripts/build_app.sh
 ```
+
+Windows (PowerShell):
+```powershell
+.\scripts\build_app.ps1
+```
+
+Notes:
+- PyInstaller is not reliable for cross-compiling Windows binaries from macOS/Linux (or vice versa).
+- Build on each target OS, or use GitHub Actions release builds (tag `v*`) to produce macOS/Linux/Windows binaries.
+- Output naming:
+  - macOS/Linux script: `release/SlackClaw-<os>-<arch>`
+  - Windows script: `release/SlackClaw-windows-<arch>.exe`
 
 The packaged binary opens a setup UI in your browser on first run — no `.env` file needed. Config is saved to:
 - macOS: `~/Library/Application Support/SlackClaw/config.json`
