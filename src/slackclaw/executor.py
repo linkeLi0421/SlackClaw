@@ -271,7 +271,7 @@ class TaskExecutor:
             cmd.extend(["--permission-mode", self._claude_permission_mode])
         if run_cwd:
             cmd.extend(["--add-dir", run_cwd])
-        cmd.append(prompt_with_context)
+        cmd.extend(["--", prompt_with_context])
         try:
             completed = subprocess.run(
                 cmd,

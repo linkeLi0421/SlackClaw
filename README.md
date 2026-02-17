@@ -1,295 +1,211 @@
 # SlackClaw
 
-Local resident Slack agent for command-channel task execution with dedupe, locking, reporting, and optional reaction approval.
+Type commands in Slack, run them locally, check reports in Slack.
 
-## Requirements
-- Python 3.11+
-- `pip install -r requirements.txt`
+SlackClaw is a local agent that watches a Slack channel for commands, executes them on your machine, and posts structured reports back to Slack. It supports shell commands and AI agent CLIs (Claude, Codex, Kimi) out of the box.
 
-## Configuration
-Required:
-- `SLACK_BOT_TOKEN`
-- `COMMAND_CHANNEL_ID`
-- `REPORT_CHANNEL_ID`
+## How It Works
 
-Socket Mode (default):
-- `SLACK_APP_TOKEN`
-
-Common optional:
-- `LISTENER_MODE=socket|poll` (default `socket`)
-- `APPROVAL_MODE=reaction|none` (default `reaction`)
-- `APPROVE_REACTION=white_check_mark`
-- `REJECT_REACTION=x`
-- `SHELL_ALLOWLIST=...` (comma/space separated shell commands allowed to run without reaction approval)
-- `TRIGGER_MODE=prefix|mention`
-- `TRIGGER_PREFIX=!do`
-- `BOT_USER_ID=` (required when `TRIGGER_MODE=mention`)
-- `STATE_DB_PATH=./state.db`
-- `POLL_INTERVAL=3`
-- `POLL_BATCH_SIZE=100`
-- `DRY_RUN=true`
-- `EXEC_TIMEOUT_SECONDS=120`
-- `WORKER_PROCESSES=1` (set `>1` to execute multiple tasks in parallel)
-- `RUN_MODE=approve|run` (default `approve`)
-- `REPORT_INPUT_MAX_CHARS=500` (default)
-- `REPORT_SUMMARY_MAX_CHARS=1200` (default)
-- `REPORT_DETAILS_MAX_CHARS=4000` (default)
-- `AGENT_WORKDIR=/absolute/path/to/your/repo` (optional; working dir for SHELL/KIMI/CODEX/CLAUDE)
-- `KIMI_PERMISSION_MODE=yolo|default` (default `yolo`)
-- `CODEX_PERMISSION_MODE=full-auto|default|dangerous` (default `full-auto`)
-- `CODEX_SANDBOX_MODE=workspace-write|read-only|danger-full-access` (default `workspace-write`, non-dangerous codex mode only)
-- `CLAUDE_PERMISSION_MODE=acceptEdits` (default; set Claude non-interactive permission mode)
-- `AGENT_RESPONSE_INSTRUCTION=...` (optional prompt style for KIMI/CODEX/CLAUDE; empty disables)
-
-## Agent Permission Env Values
-- `AGENT_WORKDIR`
-  - Value: any existing absolute directory path.
-  - Behavior: sets working directory for `SHELL`, `KIMI`, `CODEX`, and `CLAUDE`. If path does not exist, it is ignored.
-- `KIMI_PERMISSION_MODE`
-  - `yolo` (default), `auto`, `yes`: adds `--yolo`.
-  - `default`: no extra permission flag.
-  - Any other value currently behaves like `default`.
-- `CODEX_PERMISSION_MODE`
-  - `full-auto` (default): adds `--full-auto`.
-  - `dangerous`, `bypass`, `dangerously-bypass-approvals-and-sandbox`: adds `--dangerously-bypass-approvals-and-sandbox`.
-  - `default`: no extra permission shortcut flag.
-- `CODEX_SANDBOX_MODE`
-  - `workspace-write` (default), `read-only`, `danger-full-access`.
-  - Applied only when Codex mode is not dangerous.
-- `CLAUDE_PERMISSION_MODE`
-  - Passed directly to `claude --permission-mode <value>`.
-  - Common values: `acceptEdits` (default), `default`, `dontAsk`, `bypassPermissions`, `delegate`, `plan`.
-
-## Slack App Setup (Socket Mode + Events)
-Follow this once per Slack app at `https://api.slack.com/apps`:
-
-1. Open your app.
-2. Enable Socket Mode:
-   - Go to `Socket Mode`.
-   - Toggle `Enable Socket Mode` on.
-3. Create app-level token for Socket Mode:
-   - Go to `Basic Information` -> `App-Level Tokens`.
-   - Create token with scope `connections:write`.
-   - Put this `xapp-...` token in `.env` as `SLACK_APP_TOKEN`.
-4. Enable Event Subscriptions:
-   - Go to `Event Subscriptions`.
-   - Toggle `Enable Events` on.
-   - In `Subscribe to bot events`, add:
-     - `message.channels`
-     - `message.groups`
-     - `reaction_added`
-5. Add OAuth bot scopes:
-   - Go to `OAuth & Permissions` -> `Bot Token Scopes`.
-   - Add:
-     - `chat:write`
-     - `channels:history`
-     - `groups:history`
-     - `files:read` (required for image attachments)
-6. Install or reinstall app to workspace:
-   - Click `Install to Workspace` or `Reinstall`.
-7. Invite bot to channels:
-   - In Slack command and report channels, run `/invite @your-bot`.
-8. Restart agent:
-   - `./scripts/run_agent.sh`
-
-Expected behavior after setup:
-- New `!do ...` messages in `COMMAND_CHANNEL_ID` are detected.
-- With `APPROVAL_MODE=reaction`, only non-allowlisted `sh:` commands require reaction approval.
-- React `:white_check_mark:` to run, `:x:` to cancel.
-
-## Use `.env`
-1. Copy template:
-```bash
-cp .env.example .env
 ```
-2. Edit `.env` with real values.
-3. Load env vars into current shell and run:
-```bash
-set -a
-source .env
-set +a
-./scripts/run_agent.sh --once
+Slack command channel          Your machine             Slack report channel
+┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
+│ SHELL ls -la     │ ──▶ │ SlackClaw picks up   │ ──▶ │ Formatted report    │
+│ CLAUDE fix tests │     │ the message, runs it │     │ with status, output │
+│ CODEX refactor   │     │ locally, then posts  │     │ and details         │
+│ KIMI explain     │     │ the result to Slack  │     │                     │
+└─────────────────┘     └──────────────────────┘     └─────────────────────┘
 ```
 
-One-line variant:
-```bash
-set -a; source .env; set +a; ./scripts/run_agent.sh
-```
+1. You type a command in the Slack **command channel**
+2. SlackClaw detects it, optionally waits for emoji approval
+3. The command runs locally on your machine
+4. A formatted report appears in the Slack **report channel**
 
-Notes:
-- `LISTENER_MODE=poll` requires `APPROVAL_MODE=none`.
-- `BOT_USER_ID` is required only when `TRIGGER_MODE=mention`.
-- `RUN_MODE=run` forces no approval (executes immediately).
-- To use shell allowlist approvals, keep `RUN_MODE=approve` and `APPROVAL_MODE=reaction`.
-- `WORKER_PROCESSES>1` enables multi-process task execution.
-- Use `REPORT_*_MAX_CHARS` to control Slack report truncation lengths.
-- Reports are posted with Slack Block Kit + mrkdwn for cleaner formatting.
-- If `AGENT_RESPONSE_INSTRUCTION` contains spaces, wrap it in quotes in `.env`.
+## Quick Start
 
-## Run
-- Single cycle:
-```bash
-./scripts/run_agent.sh --once
-```
+### 1. Create the Slack App
 
-- Continuous:
-```bash
-./scripts/run_agent.sh
-```
+Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app:
 
-## Use With Claude/Codex/Kimi CLI
-SlackClaw executes shell commands only when command text starts with `sh:` and `DRY_RUN=false`.
+- **Socket Mode** — enable it, then create an app-level token with `connections:write` scope
+- **Event Subscriptions** — enable and subscribe to bot events: `message.channels`, `message.groups`, `reaction_added`
+- **OAuth Bot Scopes** — add: `chat:write`, `channels:history`, `groups:history`, `files:read`
+- **Install** the app to your workspace
+- **Invite** the bot to your command and report channels: `/invite @your-bot`
 
-1. Set runtime mode for real execution:
-```bash
-DRY_RUN=false
-EXEC_TIMEOUT_SECONDS=1800
-WORKER_PROCESSES=4
-RUN_MODE=approve
-APPROVAL_MODE=reaction
-```
-2. Restart agent:
-```bash
-./scripts/run_agent.sh
-```
-3. Send simple commands in Slack command channel:
-```text
-SHELL echo hello-from-slackclaw
-KIMI how to improve this repo
-CODEX fix failing tests and summarize changes
-CLAUDE review this repository and list top risks
-```
+See [docs/slack-app-setup.md](docs/slack-app-setup.md) for a detailed step-by-step walkthrough.
 
-Image command flow:
-- Upload image(s) with a command in the same message (for example: `KIMI describe this screenshot`).
-- SlackClaw downloads image attachments to `./.slackclaw_attachments/<task_id>/`.
-- For `KIMI`/`CODEX`/`CLAUDE`, local image file paths are appended to the prompt.
-- For `SHELL`, image paths are exposed via env vars:
-  - `SLACKCLAW_IMAGE_PATHS` (newline-delimited)
-  - `SLACKCLAW_IMAGE_COUNT`
-- Limits:
-  - up to 4 image files per task
-  - 20 MB max per image (pre-check and post-download check)
-
-Shell example that reads image env vars:
-```text
-SHELL python3 -c "import os; print(os.getenv('SLACKCLAW_IMAGE_COUNT')); print(os.getenv('SLACKCLAW_IMAGE_PATHS'))"
-```
-
-Troubleshooting image tasks:
-- Ensure `files:read` is granted, then reinstall the Slack app.
-- Confirm the bot is invited to the command channel where the image was posted.
-- Include command text in the same message as the upload; image-only messages are ignored.
-
-SlackClaw maps these automatically:
-- `SHELL <cmd>` -> `sh:<cmd>`
-- `KIMI <prompt>` -> non-interactive `kimi --quiet -w <cwd> [--yolo] -p "<prompt>"`
-- `CODEX <prompt>` -> non-interactive `codex exec [permission flags] [--sandbox ...] -C <cwd> --skip-git-repo-check --json "<prompt>"`
-- `CLAUDE <prompt>` -> non-interactive `claude -p --permission-mode <mode> --add-dir <cwd> "<prompt>"`
-
-If Kimi/Codex/Claude replies with permission/write-denied errors:
-1. set `AGENT_WORKDIR` to your repo path (for example `/Users/link/llk/SlackClaw`)
-2. use permissive non-interactive modes:
-   - `KIMI_PERMISSION_MODE=yolo`
-   - `CODEX_PERMISSION_MODE=full-auto` (or `dangerous` if explicitly intended)
-   - `CODEX_SANDBOX_MODE=workspace-write` (ignored when codex mode is `dangerous`)
-   - `CLAUDE_PERMISSION_MODE=acceptEdits`
-3. restart SlackClaw
-
-Shell allowlist approval behavior:
-- With `APPROVAL_MODE=reaction`, only non-allowlisted `sh:` commands pause for emoji approval.
-- Allowlisted shell commands run immediately.
-- Example disallowed command requiring approval: `SHELL rm -rf /tmp/example`.
-
-Thread-scoped behavior for `KIMI`/`CODEX`/`CLAUDE`:
-- Session/context key = Slack thread root (`thread_ts`).
-- Replies in the same Slack thread reuse agent state for that thread.
-- Shared thread context is persisted and injected into later agent prompts in that thread.
-- Default lock key for these agent commands is thread-scoped (`thread:<thread_ts>`), so different Slack threads can run in parallel when `WORKER_PROCESSES>1`.
-
-Codex output behavior:
-- Uses `codex exec --json` internally.
-- Reporter keeps assistant response text and filters noisy CLI metadata/log lines.
-
-Formatting behavior:
-- Slack reports are rendered as structured Block Kit sections (`Input`, `Summary`, `Details`).
-- KIMI/CODEX/CLAUDE prompts include `AGENT_RESPONSE_INSTRUCTION` to encourage cleaner markdown output.
-
-You can still use the advanced explicit form:
-```text
-!do sh:echo hello
-```
-
-Codex CLI example (non-interactive):
-```text
-!do sh:cd /absolute/path/to/repo && codex exec --skip-git-repo-check -C /absolute/path/to/repo "Run tests, fix failures, and summarize changed files"
-```
-
-Kimi CLI example (non-interactive):
-```text
-!do sh:cd /absolute/path/to/repo && kimi --quiet -p "Analyze this repo and propose a refactor plan"
-```
-
-Claude Code example (CLI syntax may vary by install):
-```text
-!do sh:cd /absolute/path/to/repo && claude -p "Read README.md and propose 3 concrete fixes"
-```
-
-If your Claude command differs, run `claude --help` locally and update the Slack command accordingly.
-
-## Guardrails (Recommended)
-This project can execute local shell commands. Keep these protections enabled:
-
-1. Keep approval on:
-   - `APPROVAL_MODE=reaction`
-   - Only react `:white_check_mark:` after reviewing the plan message.
-2. Start safe, then expand:
-   - Test with `DRY_RUN=true` first.
-   - Switch to `DRY_RUN=false` only after command flow is verified.
-3. Set timeouts and monitor reports:
-   - Keep `EXEC_TIMEOUT_SECONDS` reasonable.
-   - Watch report channel for failures, lock conflicts, or unexpected output.
-4. Never run privileged or destructive commands from Slack:
-   - Avoid `sudo`, filesystem wipes, credential dumps, and production-impacting commands.
-
-## Packaging
-Build a single-file app binary:
+### 2. Build the App Binary
 
 ```bash
 ./scripts/build_app.sh
 ```
 
-Build outputs:
-- `dist/SlackClaw` (or `dist/SlackClaw.exe` on Windows)
-- `release/SlackClaw-<os>-<arch>` (single executable file)
+### 3. Run the Packaged App
 
-First run (no `.env` required for packaged usage):
-1. start the binary
-2. SlackClaw opens a local setup page in your browser
-3. save tokens/channel IDs once, then SlackClaw starts immediately
+```bash
+./release/SlackClaw-macos-arm64 --setup
+./release/SlackClaw-macos-arm64
+```
 
-Setup UI behavior:
-- validates `SLACK_BOT_TOKEN` (and `SLACK_APP_TOKEN` when `LISTENER_MODE=socket`) before saving
-- keeps the setup page open if token validation fails, so you can correct values
+On first run, SlackClaw opens a local setup page in your browser. Save Slack tokens/channel IDs there, then the app starts.
 
-Config/runtime location:
-- macOS: `~/Library/Application Support/SlackClaw/`
-- Linux: `~/.config/SlackClaw/` (or `$XDG_CONFIG_HOME/SlackClaw/`)
-- Windows: `%APPDATA%\SlackClaw\`
-- saved config: `config.json`
-- default state db: `state.db` in the same folder
+## Typing Commands in Slack
 
-Useful binary flags:
-- `--setup` force-open setup UI again
-- `--show-config-path` print config file path and exit
+Send messages in your command channel. SlackClaw recognizes four command types:
 
-GitHub Actions build pipeline:
-- workflow: `.github/workflows/build-binaries.yml`
-- manual trigger: `workflow_dispatch`
-- tag trigger: push tag like `v0.1.0`
-- outputs single binaries for Linux/macOS/Windows and attaches them to GitHub Releases on tag builds
+| Prefix | What it does |
+|--------|-------------|
+| `SHELL` | Runs a shell command |
+| `CLAUDE` | Sends a prompt to Claude Code CLI |
+| `CODEX` | Sends a prompt to Codex CLI |
+| `KIMI` | Sends a prompt to Kimi CLI |
+
+Examples you type in Slack:
+```
+SHELL echo hello
+SHELL pytest tests/ -v
+CLAUDE review this repo and list top 3 issues
+CODEX fix failing tests and summarize changes
+KIMI how can I improve this codebase
+```
+
+You can also use the explicit prefix form:
+```
+!do sh:echo hello
+```
+
+### Image Attachments
+
+Upload images alongside your command in the same Slack message:
+```
+KIMI describe this screenshot
+CLAUDE what's wrong with this UI
+```
+
+- Up to 4 images per message, 20 MB max each
+- Images are downloaded locally and passed to the agent as file paths
+
+### Approval Flow
+
+With `APPROVAL_MODE=reaction` (default):
+- Non-allowlisted shell commands pause and wait for emoji approval
+- React with :white_check_mark: to approve, :x: to reject
+- Allowlisted commands (echo, ls, git, python, etc.) run immediately
+- AI agent commands (CLAUDE/CODEX/KIMI) follow `RUN_MODE` setting
+
+### Thread Context
+
+CLAUDE, CODEX, and KIMI commands are thread-aware:
+- Replies in the same Slack thread share agent context
+- Different threads run independently (parallel when `WORKER_PROCESSES>1`)
+
+## Configuration Reference
+
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `SLACK_BOT_TOKEN` | Bot user OAuth token (`xoxb-...`) |
+| `SLACK_APP_TOKEN` | App-level token (`xapp-...`, for socket mode) |
+| `COMMAND_CHANNEL_ID` | Slack channel ID where commands are posted |
+| `REPORT_CHANNEL_ID` | Slack channel ID where reports appear |
+
+### Execution
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DRY_RUN` | `true` | Show plan without executing. Set `false` to run commands |
+| `EXEC_TIMEOUT_SECONDS` | `120` | Max seconds per command |
+| `WORKER_PROCESSES` | `1` | Number of parallel workers |
+| `RUN_MODE` | `approve` | `approve` = wait for approval; `run` = execute immediately |
+
+### Listener & Trigger
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LISTENER_MODE` | `socket` | `socket` or `poll` |
+| `TRIGGER_MODE` | `prefix` | `prefix` or `mention` |
+| `TRIGGER_PREFIX` | `!do` | Message prefix that triggers SlackClaw |
+| `BOT_USER_ID` | — | Required when `TRIGGER_MODE=mention` |
+| `POLL_INTERVAL` | `3` | Seconds between polls (poll mode only) |
+
+### Approval
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APPROVAL_MODE` | `reaction` | `reaction` or `none` |
+| `APPROVE_REACTION` | `white_check_mark` | Emoji to approve |
+| `REJECT_REACTION` | `x` | Emoji to reject |
+| `SHELL_ALLOWLIST` | *(common utilities)* | Commands that skip approval |
+
+### Agent Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_WORKDIR` | — | Working directory for all agents |
+| `KIMI_PERMISSION_MODE` | `yolo` | `yolo`, `auto`, `yes`, or `default` |
+| `CODEX_PERMISSION_MODE` | `full-auto` | `full-auto`, `dangerous`, or `default` |
+| `CODEX_SANDBOX_MODE` | `workspace-write` | `workspace-write`, `read-only`, or `danger-full-access` |
+| `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Any Claude `--permission-mode` value |
+| `AGENT_RESPONSE_INSTRUCTION` | *(markdown prompt)* | Prompt style hint for agent output; empty to disable |
+
+### Report Limits
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REPORT_INPUT_MAX_CHARS` | `500` | Max chars for input section |
+| `REPORT_SUMMARY_MAX_CHARS` | `1200` | Max chars for summary section |
+| `REPORT_DETAILS_MAX_CHARS` | `4000` | Max chars for details section |
+
+## Packaging
+
+Build a standalone binary:
+
+```bash
+./scripts/build_app.sh
+```
+
+The packaged binary opens a setup UI in your browser on first run — no `.env` file needed. Config is saved to:
+- macOS: `~/Library/Application Support/SlackClaw/config.json`
+- Linux: `~/.config/SlackClaw/config.json`
+- Windows: `%APPDATA%\SlackClaw\config.json`
+
+Binary flags:
+- `--setup` — reopen the setup UI
+- `--show-config-path` — print config path and exit
+
+## Developer Mode (Source)
+
+Use this only for local development/debugging. End users should run the packaged binary.
+
+```bash
+cp .env.example .env
+set -a; source .env; set +a; ./scripts/run_agent.sh
+```
+
+Single cycle:
+```bash
+./scripts/run_agent.sh --once
+```
+
+## Guardrails
+
+SlackClaw executes commands on your local machine. Keep these protections enabled:
+
+- Start with `DRY_RUN=true` to verify command flow before real execution
+- Keep `APPROVAL_MODE=reaction` to review commands before they run
+- Set reasonable `EXEC_TIMEOUT_SECONDS` to prevent runaway processes
+- Never run privileged or destructive commands (`sudo`, `rm -rf /`, etc.) from Slack
+- Monitor the report channel for failures or unexpected output
 
 ## Test
+
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
+
+## Requirements
+
+- Python 3.11+
+- `pip install -r requirements.txt`

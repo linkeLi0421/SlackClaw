@@ -128,7 +128,7 @@ class ExecutorTests(unittest.TestCase):
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
-                args=["claude", "-p", "--permission-mode", "acceptEdits", "review this repo"],
+                args=["claude", "-p", "--permission-mode", "acceptEdits", "--", "review this repo"],
                 returncode=0,
                 stdout="claude done\n",
                 stderr="",
@@ -140,6 +140,7 @@ class ExecutorTests(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--permission-mode", cmd)
         self.assertIn("acceptEdits", cmd)
+        self.assertIn("--", cmd)
 
     def test_agent_workdir_applies_to_all_agents_and_shell(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -182,6 +183,7 @@ class ExecutorTests(unittest.TestCase):
                 self.assertIn("--full-auto", codex_cmd)
                 self.assertIn("--add-dir", claude_cmd)
                 self.assertIn(tmpdir, claude_cmd)
+                self.assertIn("--", claude_cmd)
                 self.assertEqual(kimi_kwargs.get("cwd"), tmpdir)
                 self.assertEqual(codex_kwargs.get("cwd"), tmpdir)
                 self.assertEqual(claude_kwargs.get("cwd"), tmpdir)
