@@ -219,6 +219,43 @@ This project can execute local shell commands. Keep these protections enabled:
 4. Never run privileged or destructive commands from Slack:
    - Avoid `sudo`, filesystem wipes, credential dumps, and production-impacting commands.
 
+## Packaging
+Build a single-file app binary:
+
+```bash
+./scripts/build_app.sh
+```
+
+Build outputs:
+- `dist/SlackClaw` (or `dist/SlackClaw.exe` on Windows)
+- `release/SlackClaw-<os>-<arch>` (single executable file)
+
+First run (no `.env` required for packaged usage):
+1. start the binary
+2. SlackClaw opens a local setup page in your browser
+3. save tokens/channel IDs once, then SlackClaw starts immediately
+
+Setup UI behavior:
+- validates `SLACK_BOT_TOKEN` (and `SLACK_APP_TOKEN` when `LISTENER_MODE=socket`) before saving
+- keeps the setup page open if token validation fails, so you can correct values
+
+Config/runtime location:
+- macOS: `~/Library/Application Support/SlackClaw/`
+- Linux: `~/.config/SlackClaw/` (or `$XDG_CONFIG_HOME/SlackClaw/`)
+- Windows: `%APPDATA%\SlackClaw\`
+- saved config: `config.json`
+- default state db: `state.db` in the same folder
+
+Useful binary flags:
+- `--setup` force-open setup UI again
+- `--show-config-path` print config file path and exit
+
+GitHub Actions build pipeline:
+- workflow: `.github/workflows/build-binaries.yml`
+- manual trigger: `workflow_dispatch`
+- tag trigger: push tag like `v0.1.0`
+- outputs single binaries for Linux/macOS/Windows and attaches them to GitHub Releases on tag builds
+
 ## Test
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
