@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
 import os
 import sys
 import threading
@@ -16,6 +17,11 @@ _SETUP_DEFAULTS = {
     "TRIGGER_MODE": "prefix",
     "TRIGGER_PREFIX": "!do",
     "STATE_DB_PATH": "./state.db",
+    "AGENT_WORKDIR": "",
+    "KIMI_PERMISSION_MODE": "yolo",
+    "CODEX_PERMISSION_MODE": "full-auto",
+    "CODEX_SANDBOX_MODE": "workspace-write",
+    "CLAUDE_PERMISSION_MODE": "acceptEdits",
     "DRY_RUN": "true",
     "RUN_MODE": "approve",
     "APPROVAL_MODE": "reaction",
@@ -238,6 +244,44 @@ def _setup_form_html(defaults: dict[str, str], error: str = "") -> str:
           <input name="STATE_DB_PATH" value="{v("STATE_DB_PATH")}" />
         </div>
         <div class="full">
+          <label>Agent Workdir (optional absolute path)</label>
+          <input name="AGENT_WORKDIR" value="{v("AGENT_WORKDIR")}" />
+        </div>
+        <div>
+          <label>Kimi Permission Mode</label>
+          <select name="KIMI_PERMISSION_MODE">
+            <option value="yolo" {"selected" if v("KIMI_PERMISSION_MODE") != "default" else ""}>yolo</option>
+            <option value="default" {"selected" if v("KIMI_PERMISSION_MODE") == "default" else ""}>default</option>
+          </select>
+        </div>
+        <div>
+          <label>Codex Permission Mode</label>
+          <select name="CODEX_PERMISSION_MODE">
+            <option value="full-auto" {"selected" if v("CODEX_PERMISSION_MODE") not in {"default", "dangerous"} else ""}>full-auto</option>
+            <option value="default" {"selected" if v("CODEX_PERMISSION_MODE") == "default" else ""}>default</option>
+            <option value="dangerous" {"selected" if v("CODEX_PERMISSION_MODE") == "dangerous" else ""}>dangerous</option>
+          </select>
+        </div>
+        <div>
+          <label>Codex Sandbox Mode</label>
+          <select name="CODEX_SANDBOX_MODE">
+            <option value="workspace-write" {"selected" if v("CODEX_SANDBOX_MODE") not in {"read-only", "danger-full-access"} else ""}>workspace-write</option>
+            <option value="read-only" {"selected" if v("CODEX_SANDBOX_MODE") == "read-only" else ""}>read-only</option>
+            <option value="danger-full-access" {"selected" if v("CODEX_SANDBOX_MODE") == "danger-full-access" else ""}>danger-full-access</option>
+          </select>
+        </div>
+        <div>
+          <label>Claude Permission Mode</label>
+          <select name="CLAUDE_PERMISSION_MODE">
+            <option value="acceptEdits" {"selected" if v("CLAUDE_PERMISSION_MODE") == "acceptEdits" else ""}>acceptEdits</option>
+            <option value="default" {"selected" if v("CLAUDE_PERMISSION_MODE") == "default" else ""}>default</option>
+            <option value="dontAsk" {"selected" if v("CLAUDE_PERMISSION_MODE") == "dontAsk" else ""}>dontAsk</option>
+            <option value="bypassPermissions" {"selected" if v("CLAUDE_PERMISSION_MODE") == "bypassPermissions" else ""}>bypassPermissions</option>
+            <option value="delegate" {"selected" if v("CLAUDE_PERMISSION_MODE") == "delegate" else ""}>delegate</option>
+            <option value="plan" {"selected" if v("CLAUDE_PERMISSION_MODE") == "plan" else ""}>plan</option>
+          </select>
+        </div>
+        <div class="full">
           <label>Shell Allowlist (comma or whitespace separated)</label>
           <textarea name="SHELL_ALLOWLIST">{v("SHELL_ALLOWLIST")}</textarea>
         </div>
@@ -394,4 +438,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    mp.freeze_support()
     raise SystemExit(main())

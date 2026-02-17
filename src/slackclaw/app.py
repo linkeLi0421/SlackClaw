@@ -522,14 +522,36 @@ def _drain_queue(
                 store.release_execution_lock(task.lock_key, task.task_id)
             continue
 
-        future = process_pool.submit(
-            _execute_task_in_worker,
-            task,
-            config.state_db_path,
-            config.dry_run,
-            config.exec_timeout_seconds,
-            config.agent_response_instruction,
-        )
+        try:
+            future = process_pool.submit(
+                _execute_task_in_worker,
+                task,
+                config.state_db_path,
+                config.dry_run,
+                config.exec_timeout_seconds,
+                config.agent_response_instruction,
+            )
+        except Exception as exc:
+            _event(
+                "process_pool_submit_failed",
+                task_id=task.task_id,
+                error=str(exc),
+                fallback="inline",
+            )
+            process_pool = None
+            try:
+                try:
+                    result = executor.execute(task, store=store)
+                except Exception as inline_exc:  # pragma: no cover - defensive boundary
+                    result = TaskExecutionResult(
+                        status=TaskStatus.FAILED,
+                        summary=f"executor raised error: {inline_exc}",
+                        details=traceback.format_exc(limit=5),
+                    )
+                _finish_task(task=task, result=result, store=store, reporter=reporter)
+            finally:
+                store.release_execution_lock(task.lock_key, task.task_id)
+            continue
         in_flight.append((task, future))
 
     for task, future in in_flight:

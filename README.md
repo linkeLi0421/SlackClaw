@@ -34,7 +34,31 @@ Common optional:
 - `REPORT_INPUT_MAX_CHARS=500` (default)
 - `REPORT_SUMMARY_MAX_CHARS=1200` (default)
 - `REPORT_DETAILS_MAX_CHARS=4000` (default)
+- `AGENT_WORKDIR=/absolute/path/to/your/repo` (optional; working dir for SHELL/KIMI/CODEX/CLAUDE)
+- `KIMI_PERMISSION_MODE=yolo|default` (default `yolo`)
+- `CODEX_PERMISSION_MODE=full-auto|default|dangerous` (default `full-auto`)
+- `CODEX_SANDBOX_MODE=workspace-write|read-only|danger-full-access` (default `workspace-write`, non-dangerous codex mode only)
+- `CLAUDE_PERMISSION_MODE=acceptEdits` (default; set Claude non-interactive permission mode)
 - `AGENT_RESPONSE_INSTRUCTION=...` (optional prompt style for KIMI/CODEX/CLAUDE; empty disables)
+
+## Agent Permission Env Values
+- `AGENT_WORKDIR`
+  - Value: any existing absolute directory path.
+  - Behavior: sets working directory for `SHELL`, `KIMI`, `CODEX`, and `CLAUDE`. If path does not exist, it is ignored.
+- `KIMI_PERMISSION_MODE`
+  - `yolo` (default), `auto`, `yes`: adds `--yolo`.
+  - `default`: no extra permission flag.
+  - Any other value currently behaves like `default`.
+- `CODEX_PERMISSION_MODE`
+  - `full-auto` (default): adds `--full-auto`.
+  - `dangerous`, `bypass`, `dangerously-bypass-approvals-and-sandbox`: adds `--dangerously-bypass-approvals-and-sandbox`.
+  - `default`: no extra permission shortcut flag.
+- `CODEX_SANDBOX_MODE`
+  - `workspace-write` (default), `read-only`, `danger-full-access`.
+  - Applied only when Codex mode is not dangerous.
+- `CLAUDE_PERMISSION_MODE`
+  - Passed directly to `claude --permission-mode <value>`.
+  - Common values: `acceptEdits` (default), `default`, `dontAsk`, `bypassPermissions`, `delegate`, `plan`.
 
 ## Slack App Setup (Socket Mode + Events)
 Follow this once per Slack app at `https://api.slack.com/apps`:
@@ -159,9 +183,18 @@ Troubleshooting image tasks:
 
 SlackClaw maps these automatically:
 - `SHELL <cmd>` -> `sh:<cmd>`
-- `KIMI <prompt>` -> non-interactive `kimi --quiet -p "<prompt>"`
-- `CODEX <prompt>` -> non-interactive `codex exec --skip-git-repo-check -C <cwd> "<prompt>"`
-- `CLAUDE <prompt>` -> non-interactive `claude -p "<prompt>"`
+- `KIMI <prompt>` -> non-interactive `kimi --quiet -w <cwd> [--yolo] -p "<prompt>"`
+- `CODEX <prompt>` -> non-interactive `codex exec [permission flags] [--sandbox ...] -C <cwd> --skip-git-repo-check --json "<prompt>"`
+- `CLAUDE <prompt>` -> non-interactive `claude -p --permission-mode <mode> --add-dir <cwd> "<prompt>"`
+
+If Kimi/Codex/Claude replies with permission/write-denied errors:
+1. set `AGENT_WORKDIR` to your repo path (for example `/Users/link/llk/SlackClaw`)
+2. use permissive non-interactive modes:
+   - `KIMI_PERMISSION_MODE=yolo`
+   - `CODEX_PERMISSION_MODE=full-auto` (or `dangerous` if explicitly intended)
+   - `CODEX_SANDBOX_MODE=workspace-write` (ignored when codex mode is `dangerous`)
+   - `CLAUDE_PERMISSION_MODE=acceptEdits`
+3. restart SlackClaw
 
 Shell allowlist approval behavior:
 - With `APPROVAL_MODE=reaction`, only non-allowlisted `sh:` commands pause for emoji approval.

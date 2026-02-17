@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from subprocess import CompletedProcess
@@ -78,7 +79,7 @@ class ExecutorTests(unittest.TestCase):
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
-                args=["kimi", "--quiet", "-p", "who are you"],
+                args=["kimi", "--quiet", "--yolo", "-S", "session", "-p", "who are you"],
                 returncode=0,
                 stdout="I am kimi\n",
                 stderr="",
@@ -87,6 +88,8 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, TaskStatus.SUCCEEDED)
         self.assertEqual(result.summary, "kimi command completed")
         self.assertIn("I am kimi", result.details)
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--yolo", cmd)
 
     def test_kimi_prompt_includes_attached_image_paths(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
@@ -107,7 +110,7 @@ class ExecutorTests(unittest.TestCase):
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
-                args=["codex", "exec", "--skip-git-repo-check", "-C", "/tmp", "fix tests"],
+                args=["codex", "exec", "--full-auto", "--sandbox", "workspace-write", "--json", "fix tests"],
                 returncode=0,
                 stdout="codex done\n",
                 stderr="",
@@ -116,12 +119,16 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, TaskStatus.SUCCEEDED)
         self.assertEqual(result.summary, "codex command completed")
         self.assertIn("codex done", result.details)
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--full-auto", cmd)
+        self.assertIn("--sandbox", cmd)
+        self.assertIn("workspace-write", cmd)
 
     def test_claude_command_success(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
-                args=["claude", "-p", "review this repo"],
+                args=["claude", "-p", "--permission-mode", "acceptEdits", "review this repo"],
                 returncode=0,
                 stdout="claude done\n",
                 stderr="",
@@ -130,6 +137,55 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result.status, TaskStatus.SUCCEEDED)
         self.assertEqual(result.summary, "claude command completed")
         self.assertIn("claude done", result.details)
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--permission-mode", cmd)
+        self.assertIn("acceptEdits", cmd)
+
+    def test_agent_workdir_applies_to_all_agents_and_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "AGENT_WORKDIR": tmpdir,
+                    "KIMI_PERMISSION_MODE": "yolo",
+                    "CODEX_PERMISSION_MODE": "full-auto",
+                    "CODEX_SANDBOX_MODE": "workspace-write",
+                    "CLAUDE_PERMISSION_MODE": "acceptEdits",
+                },
+                clear=False,
+            ):
+                executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+                with patch("slackclaw.executor.subprocess.run") as mock_run:
+                    mock_run.return_value = CompletedProcess(
+                        args=["agent"],
+                        returncode=0,
+                        stdout="ok\n",
+                        stderr="",
+                    )
+                    _ = executor.execute(_task("kimi:touch README"))
+                    _ = executor.execute(_task("codex:touch README"))
+                    _ = executor.execute(_task("claude:touch README"))
+                    _ = executor.execute(_task("sh:pwd"))
+
+                kimi_cmd = mock_run.call_args_list[0].args[0]
+                codex_cmd = mock_run.call_args_list[1].args[0]
+                claude_cmd = mock_run.call_args_list[2].args[0]
+                kimi_kwargs = mock_run.call_args_list[0].kwargs
+                codex_kwargs = mock_run.call_args_list[1].kwargs
+                claude_kwargs = mock_run.call_args_list[2].kwargs
+                shell_kwargs = mock_run.call_args_list[3].kwargs
+                self.assertIn("-w", kimi_cmd)
+                self.assertIn(tmpdir, kimi_cmd)
+                self.assertIn("--yolo", kimi_cmd)
+                self.assertIn("-C", codex_cmd)
+                self.assertIn(tmpdir, codex_cmd)
+                self.assertIn("--full-auto", codex_cmd)
+                self.assertIn("--add-dir", claude_cmd)
+                self.assertIn(tmpdir, claude_cmd)
+                self.assertEqual(kimi_kwargs.get("cwd"), tmpdir)
+                self.assertEqual(codex_kwargs.get("cwd"), tmpdir)
+                self.assertEqual(claude_kwargs.get("cwd"), tmpdir)
+                self.assertEqual(shell_kwargs.get("cwd"), tmpdir)
 
     def test_codex_uses_json_output_and_resumes_session_per_thread(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)

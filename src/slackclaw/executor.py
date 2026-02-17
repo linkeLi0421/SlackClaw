@@ -30,6 +30,11 @@ class TaskExecutor:
         self._dry_run = dry_run
         self._timeout_seconds = timeout_seconds
         self._response_format_instruction = response_format_instruction.strip()
+        self._agent_workdir = (os.environ.get("AGENT_WORKDIR") or "").strip()
+        self._kimi_permission_mode = (os.environ.get("KIMI_PERMISSION_MODE") or "yolo").strip().lower()
+        self._codex_permission_mode = (os.environ.get("CODEX_PERMISSION_MODE") or "full-auto").strip().lower()
+        self._codex_sandbox_mode = (os.environ.get("CODEX_SANDBOX_MODE") or "workspace-write").strip().lower()
+        self._claude_permission_mode = (os.environ.get("CLAUDE_PERMISSION_MODE") or "acceptEdits").strip()
 
     def execute(self, task: TaskSpec, *, store: StateStore | None = None) -> TaskExecutionResult:
         if self._dry_run:
@@ -92,6 +97,7 @@ class TaskExecutor:
             joined = "\n".join(task.image_paths)
             env["SLACKCLAW_IMAGE_PATHS"] = joined
             env["SLACKCLAW_IMAGE_COUNT"] = str(len(task.image_paths))
+        run_cwd = self._run_cwd()
         try:
             completed = subprocess.run(
                 command,
@@ -101,6 +107,7 @@ class TaskExecutor:
                 timeout=self._timeout_seconds,
                 check=False,
                 env=env,
+                cwd=run_cwd,
             )
         except subprocess.TimeoutExpired:
             return TaskExecutionResult(
@@ -133,13 +140,21 @@ class TaskExecutor:
     def _run_kimi(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> TaskExecutionResult:
         session_id = self._get_or_create_session(store, task, agent="kimi")
         prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
+        run_cwd = self._run_cwd()
+        cmd = ["kimi", "--quiet"]
+        if run_cwd:
+            cmd.extend(["-w", run_cwd])
+        if self._kimi_permission_mode in {"yolo", "auto", "yes"}:
+            cmd.append("--yolo")
+        cmd.extend(["-S", session_id, "-p", prompt_with_context])
         try:
             completed = subprocess.run(
-                ["kimi", "--quiet", "-S", session_id, "-p", prompt_with_context],
+                cmd,
                 text=True,
                 capture_output=True,
                 timeout=self._timeout_seconds,
                 check=False,
+                cwd=run_cwd,
             )
         except subprocess.TimeoutExpired:
             return TaskExecutionResult(
@@ -174,26 +189,36 @@ class TaskExecutor:
     def _run_codex(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> TaskExecutionResult:
         existing_session_id = store.get_agent_session(task.channel_id, task.thread_ts, "codex") if store else None
         prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
+        run_cwd = self._run_cwd()
+        codex_cwd = run_cwd or os.getcwd()
         if existing_session_id:
             cmd = [
                 "codex",
                 "exec",
                 "resume",
-                "--skip-git-repo-check",
-                "--json",
-                existing_session_id,
-                prompt_with_context,
             ]
+            cmd.extend(self._codex_permission_flags(include_sandbox=False, codex_cwd=codex_cwd))
+            cmd.extend(
+                [
+                    "--skip-git-repo-check",
+                    "--json",
+                    existing_session_id,
+                    prompt_with_context,
+                ]
+            )
         else:
             cmd = [
                 "codex",
                 "exec",
-                "--skip-git-repo-check",
-                "-C",
-                os.getcwd(),
-                "--json",
-                prompt_with_context,
             ]
+            cmd.extend(self._codex_permission_flags(include_sandbox=True, codex_cwd=codex_cwd))
+            cmd.extend(
+                [
+                    "--skip-git-repo-check",
+                    "--json",
+                    prompt_with_context,
+                ]
+            )
         try:
             completed = subprocess.run(
                 cmd,
@@ -201,6 +226,7 @@ class TaskExecutor:
                 capture_output=True,
                 timeout=self._timeout_seconds,
                 check=False,
+                cwd=run_cwd,
             )
         except subprocess.TimeoutExpired:
             return TaskExecutionResult(
@@ -239,13 +265,21 @@ class TaskExecutor:
 
     def _run_claude(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> TaskExecutionResult:
         prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
+        run_cwd = self._run_cwd()
+        cmd = ["claude", "-p"]
+        if self._claude_permission_mode:
+            cmd.extend(["--permission-mode", self._claude_permission_mode])
+        if run_cwd:
+            cmd.extend(["--add-dir", run_cwd])
+        cmd.append(prompt_with_context)
         try:
             completed = subprocess.run(
-                ["claude", "-p", prompt_with_context],
+                cmd,
                 text=True,
                 capture_output=True,
                 timeout=self._timeout_seconds,
                 check=False,
+                cwd=run_cwd,
             )
         except subprocess.TimeoutExpired:
             return TaskExecutionResult(
@@ -382,6 +416,28 @@ class TaskExecutor:
             "Response format requirements:\n"
             f"{self._response_format_instruction}"
         )
+
+    def _run_cwd(self) -> str | None:
+        configured = self._agent_workdir
+        if not configured:
+            return None
+        if os.path.isdir(configured):
+            return configured
+        return None
+
+    def _codex_permission_flags(self, *, include_sandbox: bool, codex_cwd: str) -> list[str]:
+        flags: list[str] = []
+        mode = self._codex_permission_mode
+        if mode in {"dangerous", "bypass", "dangerously-bypass-approvals-and-sandbox"}:
+            flags.append("--dangerously-bypass-approvals-and-sandbox")
+        elif mode == "full-auto":
+            flags.append("--full-auto")
+
+        if include_sandbox and mode not in {"dangerous", "bypass", "dangerously-bypass-approvals-and-sandbox"}:
+            if self._codex_sandbox_mode in {"read-only", "workspace-write", "danger-full-access"}:
+                flags.extend(["--sandbox", self._codex_sandbox_mode])
+            flags.extend(["-C", codex_cwd])
+        return flags
 
     @staticmethod
     def _append_thread_context(
