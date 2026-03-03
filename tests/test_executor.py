@@ -13,7 +13,7 @@ from slackclaw.models import TaskSpec, TaskStatus
 from slackclaw.state_store import StateStore
 
 
-def _task(command_text: str, *, image_paths: tuple[str, ...] = ()) -> TaskSpec:
+def _task(command_text: str, *, attachment_paths: tuple[str, ...] = ()) -> TaskSpec:
     return TaskSpec(
         task_id="task-1",
         channel_id="C111",
@@ -23,7 +23,7 @@ def _task(command_text: str, *, image_paths: tuple[str, ...] = ()) -> TaskSpec:
         trigger_text="!do x",
         command_text=command_text,
         lock_key="global",
-        image_paths=image_paths,
+        attachment_paths=attachment_paths,
     )
 
 
@@ -41,7 +41,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(result.summary, "shell command completed")
         self.assertIn("ok", result.details)
 
-    def test_shell_command_receives_image_env_vars(self) -> None:
+    def test_shell_command_receives_attachment_env_vars(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
@@ -50,14 +50,17 @@ class ExecutorTests(unittest.TestCase):
                 stdout="ok\n",
                 stderr="",
             )
-            result = executor.execute(_task("sh:echo hi", image_paths=("/tmp/a.png", "/tmp/b.jpg")))
+            result = executor.execute(_task("sh:echo hi", attachment_paths=("/tmp/a.png", "/tmp/b.jpg")))
 
         self.assertEqual(result.status, TaskStatus.SUCCEEDED)
         kwargs = mock_run.call_args.kwargs
         env = kwargs.get("env") or {}
+        self.assertEqual(env.get("SLACKCLAW_ATTACHMENT_COUNT"), "2")
+        self.assertIn("/tmp/a.png", str(env.get("SLACKCLAW_ATTACHMENT_PATHS", "")))
+        self.assertIn("/tmp/b.jpg", str(env.get("SLACKCLAW_ATTACHMENT_PATHS", "")))
+        # backward compat
         self.assertEqual(env.get("SLACKCLAW_IMAGE_COUNT"), "2")
         self.assertIn("/tmp/a.png", str(env.get("SLACKCLAW_IMAGE_PATHS", "")))
-        self.assertIn("/tmp/b.jpg", str(env.get("SLACKCLAW_IMAGE_PATHS", "")))
 
     def test_shell_prefix_with_empty_payload_fails(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
@@ -91,7 +94,7 @@ class ExecutorTests(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--yolo", cmd)
 
-    def test_kimi_prompt_includes_attached_image_paths(self) -> None:
+    def test_kimi_prompt_includes_attached_file_paths(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
@@ -100,10 +103,10 @@ class ExecutorTests(unittest.TestCase):
                 stdout="ok\n",
                 stderr="",
             )
-            _ = executor.execute(_task("kimi:describe image", image_paths=("/tmp/screen.png",)))
+            _ = executor.execute(_task("kimi:describe image", attachment_paths=("/tmp/screen.png",)))
 
         prompt_arg = mock_run.call_args.args[0][-1]
-        self.assertIn("Attached image file paths available on local disk", prompt_arg)
+        self.assertIn("Attached file paths on local disk", prompt_arg)
         self.assertIn("/tmp/screen.png", prompt_arg)
 
     def test_codex_command_success(self) -> None:
@@ -246,11 +249,39 @@ class ExecutorTests(unittest.TestCase):
             first_cmd = mock_run.call_args_list[0][0][0]
             second_cmd = mock_run.call_args_list[1][0][0]
             self.assertIn("--json", first_cmd)
-            self.assertEqual(first_cmd[:2], ["codex", "exec"])
-            self.assertEqual(second_cmd[:3], ["codex", "exec", "resume"])
+            self.assertTrue(os.path.basename(first_cmd[0]).lower().startswith("codex"))
+            self.assertEqual(first_cmd[1], "exec")
+            self.assertTrue(os.path.basename(second_cmd[0]).lower().startswith("codex"))
+            self.assertEqual(second_cmd[1:3], ["exec", "resume"])
             self.assertIn("thread-1", second_cmd)
             self.assertIn("agent=codex", store.get_thread_context("C111", "1.1"))
             store.close()
+
+    def test_file_command_valid_path(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"hello world")
+            filepath = f.name
+        try:
+            result = executor.execute(_task(f"file:{filepath}"))
+            self.assertEqual(result.status, TaskStatus.SUCCEEDED)
+            self.assertIn("file ready for upload", result.summary)
+            self.assertEqual(result.upload_file_path, filepath)
+        finally:
+            os.unlink(filepath)
+
+    def test_file_command_missing_path(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        result = executor.execute(_task("file:/nonexistent/path/foo.txt"))
+        self.assertEqual(result.status, TaskStatus.FAILED)
+        self.assertIn("file not found", result.summary)
+        self.assertEqual(result.upload_file_path, "")
+
+    def test_file_command_empty_path(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30)
+        result = executor.execute(_task("file:   "))
+        self.assertEqual(result.status, TaskStatus.FAILED)
+        self.assertIn("invalid file command", result.summary)
 
 
 if __name__ == "__main__":

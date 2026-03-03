@@ -239,6 +239,10 @@ def _setup_form_html(defaults: dict[str, str], error: str = "") -> str:
           <label>Worker Processes</label>
           <input type="number" min="1" name="WORKER_PROCESSES" value="{v("WORKER_PROCESSES") or "1"}" />
         </div>
+        <div>
+          <label>Dashboard Port (0 = random)</label>
+          <input type="number" min="0" max="65535" name="DASHBOARD_PORT" value="{v("DASHBOARD_PORT") or "0"}" />
+        </div>
         <div class="full">
           <label>State DB Path</label>
           <input name="STATE_DB_PATH" value="{v("STATE_DB_PATH")}" />

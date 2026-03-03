@@ -107,8 +107,8 @@ class AppImageTests(unittest.TestCase):
             task = queue.dequeue()
             assert task is not None
             self.assertEqual(task.command_text, "kimi:describe this image")
-            self.assertEqual(len(task.image_paths), 1)
-            self.assertTrue(Path(task.image_paths[0]).exists())
+            self.assertEqual(len(task.attachment_paths), 1)
+            self.assertTrue(Path(task.attachment_paths[0]).exists())
             self.assertEqual(len(client.download_calls), 1)
             self.assertEqual(len(reporter.calls), 0)
             store.close()
@@ -160,7 +160,53 @@ class AppImageTests(unittest.TestCase):
             assert task_row is not None
             self.assertEqual(task_row.status, TaskStatus.FAILED)
             self.assertEqual(len(reporter.calls), 1)
-            self.assertIn("failed to prepare image attachment", reporter.calls[0][2])
+            self.assertIn("failed to prepare file attachment", reporter.calls[0][2])
+            store.close()
+
+    def test_process_command_downloads_non_image_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = _config()
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            queue = TaskQueue()
+            client = FakeClient()
+            reporter = FakeReporter()
+            message = SlackMessage(
+                channel_id="C111",
+                ts="1.2",
+                user="U1",
+                text="CLAUDE analyze this PDF",
+                raw={
+                    "subtype": "file_share",
+                    "files": [
+                        {
+                            "id": "F222",
+                            "name": "report.pdf",
+                            "mimetype": "application/pdf",
+                            "size": 2048,
+                            "url_private_download": "https://files.slack.test/F222",
+                        }
+                    ],
+                },
+            )
+
+            with patch("slackclaw.app.ATTACHMENTS_BASE_DIR", str(Path(tmpdir) / "attachments")):
+                enqueued = _process_command_message(
+                    cfg,
+                    message,
+                    store=store,
+                    queue=queue,
+                    client=client,  # type: ignore[arg-type]
+                    reporter=reporter,  # type: ignore[arg-type]
+                )
+
+            self.assertEqual(enqueued, 1)
+            self.assertEqual(len(queue), 1)
+            task = queue.dequeue()
+            assert task is not None
+            self.assertEqual(len(task.attachment_paths), 1)
+            self.assertTrue(task.attachment_paths[0].endswith(".pdf"))
+            self.assertEqual(len(client.download_calls), 1)
             store.close()
 
 

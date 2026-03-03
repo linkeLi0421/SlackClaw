@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 
 from slackclaw.models import TaskExecutionResult, TaskSpec, TaskStatus
@@ -9,6 +11,7 @@ from slackclaw.reporter import Reporter
 class FakeClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, list[dict] | None]] = []
+        self.upload_calls: list[dict] = []
         self.error: Exception | None = None
 
     def chat_post_message(
@@ -23,6 +26,28 @@ class FakeClient:
             raise self.error
         self.calls.append((channel_id, text, blocks))
         return {"ok": True, "ts": "1.1"}
+
+    def upload_file(
+        self,
+        *,
+        channel_id: str,
+        filepath: str,
+        filename: str = "",
+        title: str = "",
+        thread_ts: str | None = None,
+        initial_comment: str = "",
+    ) -> dict:
+        self.upload_calls.append(
+            {
+                "channel_id": channel_id,
+                "filepath": filepath,
+                "filename": filename,
+                "title": title,
+                "thread_ts": thread_ts,
+                "initial_comment": initial_comment,
+            }
+        )
+        return {"ok": True}
 
 
 class ReporterTests(unittest.TestCase):
@@ -97,6 +122,74 @@ class ReporterTests(unittest.TestCase):
         self.assertIn("summary: 0123456...", text)
         self.assertIn("details: zzzzzzzzz...", text)
         self.assertIsNotNone(blocks)
+
+    def test_auto_file_uploads_when_details_exceed_threshold(self) -> None:
+        client = FakeClient()
+        reporter = Reporter(
+            client=client,
+            report_channel_id="C_REPORT",
+            file_output_threshold=50,
+        )
+        long_details = "x" * 200
+        result = TaskExecutionResult(
+            status=TaskStatus.SUCCEEDED,
+            summary="ok",
+            details=long_details,
+        )
+
+        reporter.report(self._task(), result)
+
+        self.assertEqual(len(client.calls), 1)
+        _channel, text, _blocks = client.calls[0]
+        self.assertIn("full output uploaded as file", text)
+
+        self.assertEqual(len(client.upload_calls), 1)
+        upload = client.upload_calls[0]
+        self.assertEqual(upload["channel_id"], "C_REPORT")
+        self.assertIn("task-1", upload["filename"])
+        # temp file should have been cleaned up
+        self.assertFalse(os.path.exists(upload["filepath"]))
+
+    def test_no_auto_file_when_details_under_threshold(self) -> None:
+        client = FakeClient()
+        reporter = Reporter(
+            client=client,
+            report_channel_id="C_REPORT",
+            file_output_threshold=4000,
+        )
+        result = TaskExecutionResult(
+            status=TaskStatus.SUCCEEDED,
+            summary="ok",
+            details="short output",
+        )
+
+        reporter.report(self._task(), result)
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(len(client.upload_calls), 0)
+
+    def test_upload_file_path_triggers_file_upload(self) -> None:
+        client = FakeClient()
+        reporter = Reporter(client=client, report_channel_id="C_REPORT")
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
+            f.write(b"col1,col2\n1,2\n")
+            filepath = f.name
+        try:
+            result = TaskExecutionResult(
+                status=TaskStatus.SUCCEEDED,
+                summary="file ready",
+                details=f"uploading {filepath}",
+                upload_file_path=filepath,
+            )
+            reporter.report(self._task(), result)
+
+            self.assertEqual(len(client.calls), 1)
+            self.assertEqual(len(client.upload_calls), 1)
+            upload = client.upload_calls[0]
+            self.assertEqual(upload["filepath"], filepath)
+            self.assertEqual(upload["channel_id"], "C_REPORT")
+        finally:
+            os.unlink(filepath)
 
 
 if __name__ == "__main__":

@@ -163,5 +163,45 @@ class StateStoreTests(unittest.TestCase):
             store.close()
 
 
+    def test_list_tasks_and_count_by_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+
+            store.upsert_task("t1", TaskStatus.PENDING, payload={"cmd": "a"})
+            store.upsert_task("t2", TaskStatus.RUNNING, payload={"cmd": "b"})
+            store.upsert_task("t3", TaskStatus.SUCCEEDED, payload={"cmd": "c"})
+
+            tasks = store.list_tasks()
+            self.assertEqual(len(tasks), 3)
+            task_ids = {t.task_id for t in tasks}
+            self.assertEqual(task_ids, {"t1", "t2", "t3"})
+
+            counts = store.count_tasks_by_status()
+            self.assertEqual(counts.get("pending"), 1)
+            self.assertEqual(counts.get("running"), 1)
+            self.assertEqual(counts.get("succeeded"), 1)
+
+            self.assertEqual(store.list_execution_locks(), [])
+            store.acquire_execution_lock("global", "t2")
+            locks = store.list_execution_locks()
+            self.assertEqual(len(locks), 1)
+            self.assertEqual(locks[0]["lock_key"], "global")
+
+            self.assertEqual(store.list_agent_sessions(), [])
+            store.upsert_agent_session("C1", "1.1", "codex", "sess-1")
+            sessions = store.list_agent_sessions()
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0]["agent"], "codex")
+
+            self.assertEqual(store.list_checkpoints(), [])
+            store.set_checkpoint("k1", "v1")
+            checkpoints = store.list_checkpoints()
+            self.assertEqual(len(checkpoints), 1)
+            self.assertEqual(checkpoints[0]["key"], "k1")
+
+            store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

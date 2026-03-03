@@ -13,6 +13,7 @@ _SIMPLE_SHELL_RE = re.compile(r"^shell\s+(.+)$", re.IGNORECASE)
 _SIMPLE_KIMI_RE = re.compile(r"^kimi\s+(.+)$", re.IGNORECASE)
 _SIMPLE_CODEX_RE = re.compile(r"^codex\s+(.+)$", re.IGNORECASE)
 _SIMPLE_CLAUDE_RE = re.compile(r"^claude\s+(.+)$", re.IGNORECASE)
+_SIMPLE_FILE_RE = re.compile(r"^file\s+(.+)$", re.IGNORECASE)
 _THREAD_LOCAL_COMMAND_PREFIXES = ("kimi:", "codex:", "claude:")
 
 
@@ -78,6 +79,12 @@ def _parse_simple_command(text: str) -> str | None:
         prompt = claude_match.group(1).strip()
         if prompt:
             return f"claude:{prompt}"
+
+    file_match = _SIMPLE_FILE_RE.match(text)
+    if file_match:
+        filepath = file_match.group(1).strip()
+        if filepath:
+            return f"file:{filepath}"
 
     return None
 

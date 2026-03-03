@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import AppConfig, ConfigError, load_config
+from .dashboard import DashboardContext, start_dashboard
 from .decider import decide_message
 from .executor import TaskExecutor
 from .listener import SlackChannelListener, SlackSocketModeListener
@@ -25,8 +26,8 @@ from .state_store import StateStore
 
 CHECKPOINT_KEY_PREFIX = "last_ts"
 ATTACHMENTS_BASE_DIR = ".slackclaw_attachments"
-MAX_IMAGE_FILES_PER_TASK = 4
-MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENT_FILES_PER_TASK = 4
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _SHELL_SPLIT_RE = re.compile(r"(?:&&|\|\||;|\|)")
 _SHELL_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
@@ -107,28 +108,41 @@ def _guess_extension(filename: str, mimetype: str) -> str:
     if suffix:
         return suffix
     normalized = (mimetype or "").strip().lower()
-    if normalized == "image/png":
-        return ".png"
-    if normalized in {"image/jpeg", "image/jpg"}:
-        return ".jpg"
-    if normalized == "image/gif":
-        return ".gif"
-    if normalized == "image/webp":
-        return ".webp"
-    return ".img"
+    _MIME_EXT_MAP = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "application/pdf": ".pdf",
+        "application/json": ".json",
+        "text/plain": ".txt",
+        "text/csv": ".csv",
+        "application/zip": ".zip",
+        "application/gzip": ".gz",
+        "application/x-tar": ".tar",
+        "application/x-gzip": ".tar.gz",
+        "application/xml": ".xml",
+        "text/xml": ".xml",
+        "text/html": ".html",
+        "application/javascript": ".js",
+        "text/javascript": ".js",
+        "application/x-yaml": ".yaml",
+        "text/yaml": ".yaml",
+        "application/octet-stream": ".bin",
+    }
+    return _MIME_EXT_MAP.get(normalized, ".bin")
 
 
-def _extract_image_entries(message: SlackMessage) -> list[dict]:
+def _extract_file_entries(message: SlackMessage) -> list[dict]:
     raw_files = message.raw.get("files") or []
     if not isinstance(raw_files, list):
         return []
-    image_entries: list[dict] = []
+    file_entries: list[dict] = []
     for raw in raw_files:
         if not isinstance(raw, dict):
             continue
         mimetype = str(raw.get("mimetype") or "").strip().lower()
-        if not mimetype.startswith("image/"):
-            continue
         url = str(raw.get("url_private_download") or raw.get("url_private") or "").strip()
         if not url:
             continue
@@ -137,7 +151,7 @@ def _extract_image_entries(message: SlackMessage) -> list[dict]:
             size_bytes = max(0, int(raw_size))
         except Exception:
             size_bytes = 0
-        image_entries.append(
+        file_entries.append(
             {
                 "id": str(raw.get("id") or ""),
                 "name": str(raw.get("name") or ""),
@@ -146,47 +160,47 @@ def _extract_image_entries(message: SlackMessage) -> list[dict]:
                 "size_bytes": size_bytes,
             }
         )
-    return image_entries
+    return file_entries
 
 
-def _materialize_task_images(task: TaskSpec, *, message: SlackMessage, client: SlackWebClient) -> TaskSpec:
-    image_entries = _extract_image_entries(message)
-    if not image_entries:
+def _materialize_task_attachments(task: TaskSpec, *, message: SlackMessage, client: SlackWebClient) -> TaskSpec:
+    file_entries = _extract_file_entries(message)
+    if not file_entries:
         return task
 
     output_dir = Path(ATTACHMENTS_BASE_DIR) / task.task_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    image_paths: list[str] = []
-    for index, entry in enumerate(image_entries[:MAX_IMAGE_FILES_PER_TASK], start=1):
+    attachment_paths: list[str] = []
+    for index, entry in enumerate(file_entries[:MAX_ATTACHMENT_FILES_PER_TASK], start=1):
         size_bytes = int(entry["size_bytes"])
-        if size_bytes > MAX_IMAGE_BYTES:
+        if size_bytes > MAX_ATTACHMENT_BYTES:
             raise RuntimeError(
-                f"image '{entry['name'] or entry['id'] or index}' exceeds {MAX_IMAGE_BYTES} bytes limit"
+                f"attachment '{entry['name'] or entry['id'] or index}' exceeds {MAX_ATTACHMENT_BYTES} bytes limit"
             )
 
         try:
             payload = client.download_private_file(str(entry["url"]))
         except Exception as exc:
             raise RuntimeError(
-                f"failed to download image '{entry['name'] or entry['id'] or index}': {exc}"
+                f"failed to download attachment '{entry['name'] or entry['id'] or index}': {exc}"
             ) from exc
 
-        if len(payload) > MAX_IMAGE_BYTES:
+        if len(payload) > MAX_ATTACHMENT_BYTES:
             raise RuntimeError(
-                f"downloaded image '{entry['name'] or entry['id'] or index}' exceeds {MAX_IMAGE_BYTES} bytes limit"
+                f"downloaded attachment '{entry['name'] or entry['id'] or index}' exceeds {MAX_ATTACHMENT_BYTES} bytes limit"
             )
 
-        filename = str(entry["name"] or entry["id"] or f"image_{index:02d}")
-        stem = _sanitize_filename(Path(filename).stem, f"image_{index:02d}")
+        filename = str(entry["name"] or entry["id"] or f"file_{index:02d}")
+        stem = _sanitize_filename(Path(filename).stem, f"file_{index:02d}")
         ext = _guess_extension(filename, str(entry["mimetype"]))
         path = output_dir / f"{index:02d}_{stem}{ext}"
         path.write_bytes(payload)
-        image_paths.append(str(path.resolve()))
+        attachment_paths.append(str(path.resolve()))
 
-    if not image_paths:
+    if not attachment_paths:
         return task
-    return replace(task, image_paths=tuple(image_paths))
+    return replace(task, attachment_paths=tuple(attachment_paths))
 
 
 def _task_payload(task: TaskSpec) -> dict:
@@ -198,7 +212,7 @@ def _task_payload(task: TaskSpec) -> dict:
         "trigger_text": task.trigger_text,
         "command_text": task.command_text,
         "lock_key": task.lock_key,
-        "image_paths": list(task.image_paths),
+        "attachment_paths": list(task.attachment_paths),
     }
 
 
@@ -206,11 +220,11 @@ def _task_from_payload(task_id: str, payload: dict) -> TaskSpec | None:
     try:
         message_ts = str(payload["message_ts"])
         thread_ts = str(payload.get("thread_ts") or message_ts)
-        raw_image_paths = payload.get("image_paths") or []
-        image_paths: tuple[str, ...] = ()
-        if isinstance(raw_image_paths, list):
-            normalized = [str(path).strip() for path in raw_image_paths if str(path).strip()]
-            image_paths = tuple(normalized)
+        raw_paths = payload.get("attachment_paths") or payload.get("image_paths") or []
+        attachment_paths: tuple[str, ...] = ()
+        if isinstance(raw_paths, list):
+            normalized = [str(path).strip() for path in raw_paths if str(path).strip()]
+            attachment_paths = tuple(normalized)
         return TaskSpec(
             task_id=task_id,
             channel_id=str(payload["channel_id"]),
@@ -220,7 +234,7 @@ def _task_from_payload(task_id: str, payload: dict) -> TaskSpec | None:
             trigger_text=str(payload["trigger_text"]),
             command_text=str(payload["command_text"]),
             lock_key=str(payload["lock_key"]),
-            image_paths=image_paths,
+            attachment_paths=attachment_paths,
         )
     except Exception:
         return None
@@ -234,8 +248,8 @@ def _approval_plan_text(config: AppConfig, task: TaskSpec, *, reason: str | None
     ]
     if reason:
         lines.append(f"reason: {reason}")
-    if task.image_paths:
-        lines.append(f"images: {len(task.image_paths)} downloaded attachment(s)")
+    if task.attachment_paths:
+        lines.append(f"attachments: {len(task.attachment_paths)} downloaded file(s)")
     lines.append(
         f"React with :{config.approve_reaction}: to run or :{config.reject_reaction}: to cancel."
     )
@@ -312,23 +326,23 @@ def _process_command_message(
         return 0
 
     try:
-        task = _materialize_task_images(task, message=message, client=client)
+        task = _materialize_task_attachments(task, message=message, client=client)
     except Exception as exc:
         store.upsert_task(task.task_id, TaskStatus.FAILED, payload=_task_payload(task))
         result = TaskExecutionResult(
             status=TaskStatus.FAILED,
-            summary=f"failed to prepare image attachment(s): {exc}",
+            summary=f"failed to prepare file attachment(s): {exc}",
             details="Ensure files:read scope is granted and uploaded files are accessible to the bot.",
         )
         try:
             reporter.report(task, result)
         except Exception as report_exc:
             _event("report_failed", task_id=task.task_id, error=str(report_exc))
-        _event("task_image_prepare_failed", task_id=task.task_id, error=str(exc))
+        _event("task_attachment_prepare_failed", task_id=task.task_id, error=str(exc))
         return 0
 
-    if task.image_paths:
-        _event("task_images_prepared", task_id=task.task_id, image_count=len(task.image_paths))
+    if task.attachment_paths:
+        _event("task_attachments_prepared", task_id=task.task_id, attachment_count=len(task.attachment_paths))
 
     approval_reason: str | None = None
     if config.approval_mode == "reaction" and task.command_text.startswith("sh:"):
@@ -658,6 +672,7 @@ def run(argv: list[str] | None = None) -> int:
         input_max_chars=config.report_input_max_chars,
         summary_max_chars=config.report_summary_max_chars,
         details_max_chars=config.report_details_max_chars,
+        file_output_threshold=config.file_output_threshold,
     )
 
     _event(
@@ -685,6 +700,32 @@ def run(argv: list[str] | None = None) -> int:
         auth_team=auth.get("team"),
     )
 
+    # --- Start dashboard ---
+    def _in_flight_snapshot() -> list[dict]:
+        return [
+            {
+                "task_id": task.task_id,
+                "command_text": task.command_text,
+                "trigger_user": task.trigger_user,
+                "channel_id": task.channel_id,
+            }
+            for task, _future in in_flight
+        ]
+
+    dashboard_ctx = DashboardContext(
+        config=config,
+        state_db_path=config.state_db_path,
+        queue_snapshot=queue.snapshot,
+        in_flight_snapshot=_in_flight_snapshot,
+        queue_len=queue.__len__,
+    )
+    _dashboard_thread, dashboard_server = start_dashboard(dashboard_ctx)
+    _dashboard_url = f"http://127.0.0.1:{dashboard_server.server_port}"
+    _event("dashboard_started", url=_dashboard_url)
+    print(f"Dashboard: {_dashboard_url}", flush=True)
+    import webbrowser as _wb
+    _wb.open(_dashboard_url)
+
     # --- Send startup banner to report channel ---
     import os as _os
     _app_name = "SlackClaw"
@@ -707,6 +748,7 @@ def run(argv: list[str] | None = None) -> int:
         f"*Command channel:* <#{config.command_channel_id}>",
         f"*Report channel:* <#{config.report_channel_id}>",
         f"*Workers:* `{config.worker_processes}`",
+        f"*Dashboard:* `{_dashboard_url}`",
     ]
     if config.dry_run:
         _startup_lines.append(
@@ -825,6 +867,7 @@ def run(argv: list[str] | None = None) -> int:
             if config.listener_mode == "poll":
                 time.sleep(config.poll_interval)
     finally:
+        dashboard_server.shutdown()
         if socket_listener is not None:
             socket_listener.close()
         _finalize_in_flight(in_flight=in_flight, store=store, reporter=reporter, wait=True)

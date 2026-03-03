@@ -24,5 +24,17 @@ class TaskQueue:
         self._task_ids.discard(task.task_id)
         return task
 
+    def snapshot(self) -> list[dict]:
+        return [
+            {
+                "task_id": task.task_id,
+                "command_text": task.command_text,
+                "trigger_user": task.trigger_user,
+                "channel_id": task.channel_id,
+                "thread_ts": task.thread_ts,
+            }
+            for task in self._items
+        ]
+
     def __len__(self) -> int:
         return len(self._items)

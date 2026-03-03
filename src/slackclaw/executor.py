@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from uuid import uuid4
 
@@ -10,6 +11,17 @@ from .state_store import StateStore
 
 
 _THREAD_CONTEXT_MAX_CHARS = 12000
+
+
+def _resolve_cli(name: str) -> str:
+    """Resolve a CLI name to its full path.
+
+    On Windows, subprocess.run with a list arg does not find .cmd/.bat
+    wrappers (e.g. claude.cmd installed by npm).  shutil.which handles
+    this correctly across platforms.
+    """
+    resolved = shutil.which(name)
+    return resolved if resolved else name
 _DEFAULT_AGENT_RESPONSE_INSTRUCTION = (
     "Format the final answer for Slack Markdown.\n"
     "- Start with a one-line summary.\n"
@@ -79,6 +91,16 @@ class TaskExecutor:
                 )
             return self._run_kimi(prompt, task=task, store=store)
 
+        if command.startswith("file:"):
+            filepath = command[5:].strip()
+            if not filepath:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary="invalid file command: empty path",
+                    details="use format: file:<path> or Slack message `FILE <path>`",
+                )
+            return self._run_file(filepath)
+
         if command.startswith("sh:"):
             shell_cmd = command[3:].strip()
             if not shell_cmd:
@@ -95,12 +117,30 @@ class TaskExecutor:
             details=f"received command text: {task.command_text}",
         )
 
+    @staticmethod
+    def _run_file(filepath: str) -> TaskExecutionResult:
+        if not os.path.isfile(filepath):
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"file not found: {filepath}",
+                details=f"The path '{filepath}' does not exist or is not a regular file.",
+            )
+        return TaskExecutionResult(
+            status=TaskStatus.SUCCEEDED,
+            summary=f"file ready for upload: {os.path.basename(filepath)}",
+            details=f"uploading {filepath}",
+            upload_file_path=filepath,
+        )
+
     def _run_shell(self, command: str, *, task: TaskSpec) -> TaskExecutionResult:
         env = os.environ.copy()
-        if task.image_paths:
-            joined = "\n".join(task.image_paths)
+        if task.attachment_paths:
+            joined = "\n".join(task.attachment_paths)
+            env["SLACKCLAW_ATTACHMENT_PATHS"] = joined
+            env["SLACKCLAW_ATTACHMENT_COUNT"] = str(len(task.attachment_paths))
+            # backward compat
             env["SLACKCLAW_IMAGE_PATHS"] = joined
-            env["SLACKCLAW_IMAGE_COUNT"] = str(len(task.image_paths))
+            env["SLACKCLAW_IMAGE_COUNT"] = str(len(task.attachment_paths))
         run_cwd = self._run_cwd()
         try:
             completed = subprocess.run(
@@ -145,7 +185,7 @@ class TaskExecutor:
         session_id = self._get_or_create_session(store, task, agent="kimi")
         prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
         run_cwd = self._run_cwd()
-        cmd = ["kimi", "--quiet"]
+        cmd = [_resolve_cli("kimi"), "--quiet"]
         if run_cwd:
             cmd.extend(["-w", run_cwd])
         if self._kimi_permission_mode in {"yolo", "auto", "yes"}:
@@ -195,9 +235,10 @@ class TaskExecutor:
         prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
         run_cwd = self._run_cwd()
         codex_cwd = run_cwd or os.getcwd()
+        codex_bin = _resolve_cli("codex")
         if existing_session_id:
             cmd = [
-                "codex",
+                codex_bin,
                 "exec",
                 "resume",
             ]
@@ -212,7 +253,7 @@ class TaskExecutor:
             )
         else:
             cmd = [
-                "codex",
+                codex_bin,
                 "exec",
             ]
             cmd.extend(self._codex_permission_flags(include_sandbox=True, codex_cwd=codex_cwd))
@@ -270,11 +311,20 @@ class TaskExecutor:
     def _run_claude(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> TaskExecutionResult:
         prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
         run_cwd = self._run_cwd()
-        cmd = ["claude", "-p"]
+        cmd = [_resolve_cli("claude"), "-p"]
         if self._claude_permission_mode:
             cmd.extend(["--permission-mode", self._claude_permission_mode])
         if run_cwd:
             cmd.extend(["--add-dir", run_cwd])
+        # Grant Claude Code read access to the attachment directory so it can
+        # open downloaded files (images, PDFs, etc.) with the Read tool.
+        if task.attachment_paths:
+            seen_dirs: set[str] = set()
+            for path in task.attachment_paths:
+                parent = os.path.dirname(os.path.abspath(path))
+                if parent and parent not in seen_dirs:
+                    seen_dirs.add(parent)
+                    cmd.extend(["--add-dir", parent])
         cmd.extend(["--", prompt_with_context])
         try:
             completed = subprocess.run(
@@ -405,12 +455,12 @@ class TaskExecutor:
                     f"Current request:\n{prompt}"
                 )
 
-        if task.image_paths:
-            image_list = "\n".join(f"- {path}" for path in task.image_paths)
+        if task.attachment_paths:
+            attachment_list = "\n".join(f"- {path}" for path in task.attachment_paths)
             base_prompt = (
                 f"{base_prompt}\n\n"
-                "Attached image file paths available on local disk:\n"
-                f"{image_list}"
+                "Attached file paths on local disk (use the Read tool to open them):\n"
+                f"{attachment_list}"
             )
 
         if not self._response_format_instruction:

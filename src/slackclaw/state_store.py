@@ -435,6 +435,79 @@ class StateStore:
         self._conn.commit()
         return cur.rowcount == 1
 
+    def list_tasks(self, limit: int = 200) -> list[TaskRecord]:
+        rows = self._conn.execute(
+            "SELECT task_id, status, payload, created_at, updated_at "
+            "FROM tasks ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        result: list[TaskRecord] = []
+        for row in rows:
+            payload_raw = row["payload"]
+            parsed_payload = json.loads(payload_raw) if payload_raw else {}
+            result.append(
+                TaskRecord(
+                    task_id=str(row["task_id"]),
+                    status=TaskStatus(str(row["status"])),
+                    payload=parsed_payload,
+                    created_at=str(row["created_at"]),
+                    updated_at=str(row["updated_at"]),
+                )
+            )
+        return result
+
+    def count_tasks_by_status(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status"
+        ).fetchall()
+        return {str(row["status"]): int(row["cnt"]) for row in rows}
+
+    def list_agent_sessions(self, limit: int = 200) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT channel_id, thread_ts, agent, session_id, updated_at "
+            "FROM agent_sessions ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "channel_id": str(row["channel_id"]),
+                "thread_ts": str(row["thread_ts"]),
+                "agent": str(row["agent"]),
+                "session_id": str(row["session_id"]),
+                "updated_at": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    def list_task_approvals(self, limit: int = 200) -> list[TaskApprovalRecord]:
+        rows = self._conn.execute(
+            "SELECT task_id, channel_id, source_message_ts, approval_message_ts, "
+            "approve_reaction, reject_reaction, status, decided_by, "
+            "decision_reaction, created_at, updated_at "
+            "FROM task_approvals ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [self._approval_record_from_row(row) for row in rows]
+
+    def list_execution_locks(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT lock_key, task_id, acquired_at FROM execution_locks ORDER BY acquired_at DESC"
+        ).fetchall()
+        return [
+            {
+                "lock_key": str(row["lock_key"]),
+                "task_id": str(row["task_id"]),
+                "acquired_at": str(row["acquired_at"]),
+            }
+            for row in rows
+        ]
+
+    def list_checkpoints(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT key, value FROM checkpoint ORDER BY key"
+        ).fetchall()
+        return [{"key": str(row["key"]), "value": str(row["value"])} for row in rows]
+
     @staticmethod
     def _approval_record_from_row(row: sqlite3.Row) -> TaskApprovalRecord:
         return TaskApprovalRecord(

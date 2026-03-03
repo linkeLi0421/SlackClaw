@@ -13,6 +13,7 @@ ALLOWED_RUN_MODES = {"approve", "run"}
 DEFAULT_REPORT_INPUT_MAX_CHARS = 500
 DEFAULT_REPORT_SUMMARY_MAX_CHARS = 1200
 DEFAULT_REPORT_DETAILS_MAX_CHARS = 4000
+DEFAULT_FILE_OUTPUT_THRESHOLD = 4000
 DEFAULT_SHELL_ALLOWLIST = (
     "echo",
     "printf",
@@ -87,9 +88,11 @@ class AppConfig:
     approval_mode: str
     approve_reaction: str
     reject_reaction: str
+    file_output_threshold: int = DEFAULT_FILE_OUTPUT_THRESHOLD
     agent_response_instruction: str = ""
     worker_processes: int = 1
     shell_allowlist: tuple[str, ...] = DEFAULT_SHELL_ALLOWLIST
+    dashboard_port: int = 0
 
 
 def _required(env: Mapping[str, str], key: str) -> str:
@@ -220,6 +223,11 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         source.get("REPORT_DETAILS_MAX_CHARS", ""),
         DEFAULT_REPORT_DETAILS_MAX_CHARS,
     )
+    file_output_threshold = _parse_positive_int(
+        "FILE_OUTPUT_THRESHOLD",
+        source.get("FILE_OUTPUT_THRESHOLD", ""),
+        DEFAULT_FILE_OUTPUT_THRESHOLD,
+    )
     if "AGENT_RESPONSE_INSTRUCTION" in source:
         agent_response_instruction = (source.get("AGENT_RESPONSE_INSTRUCTION") or "").strip()
     else:
@@ -248,6 +256,16 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         source.get("SHELL_ALLOWLIST", ""),
         DEFAULT_SHELL_ALLOWLIST,
     )
+    _raw_dashboard_port = (source.get("DASHBOARD_PORT") or "").strip()
+    if _raw_dashboard_port:
+        try:
+            dashboard_port = int(_raw_dashboard_port)
+        except ValueError:
+            raise ConfigError(f"DASHBOARD_PORT must be an integer, got {_raw_dashboard_port!r}")
+        if dashboard_port < 0 or dashboard_port > 65535:
+            raise ConfigError(f"DASHBOARD_PORT must be 0-65535, got {dashboard_port}")
+    else:
+        dashboard_port = 0
 
     return AppConfig(
         slack_bot_token=slack_bot_token,
@@ -271,7 +289,9 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         approval_mode=approval_mode,
         approve_reaction=approve_reaction,
         reject_reaction=reject_reaction,
+        file_output_threshold=file_output_threshold,
         agent_response_instruction=agent_response_instruction,
         worker_processes=worker_processes,
         shell_allowlist=shell_allowlist,
+        dashboard_port=dashboard_port,
     )

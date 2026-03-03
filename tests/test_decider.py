@@ -152,6 +152,14 @@ class DeciderTests(unittest.TestCase):
         self.assertEqual(decision.task.message_ts, "2.2")
         self.assertEqual(decision.task.thread_ts, "1.1")
 
+    def test_simple_file_command_without_prefix(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="FILE /tmp/report.csv", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "file:/tmp/report.csv")
+
     def test_thread_lock_uses_thread_root_ts_for_agents(self) -> None:
         cfg = _config(trigger_mode="prefix")
         msg = SlackMessage(

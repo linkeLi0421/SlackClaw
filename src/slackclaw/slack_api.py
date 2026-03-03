@@ -120,6 +120,61 @@ class SlackWebClient:
     def apps_connections_open(self, *, app_token: str) -> dict:
         return self.api_call("POST", "apps.connections.open", json_body={}, token=app_token)
 
+    def upload_file(
+        self,
+        *,
+        channel_id: str,
+        filepath: str,
+        filename: str = "",
+        title: str = "",
+        thread_ts: str | None = None,
+        initial_comment: str = "",
+    ) -> dict:
+        import os
+
+        if not filename:
+            filename = os.path.basename(filepath)
+        file_size = os.path.getsize(filepath)
+
+        # Step 1: get upload URL
+        get_url_body: dict[str, object] = {
+            "filename": filename,
+            "length": file_size,
+        }
+        url_resp = self.api_call("POST", "files.getUploadURLExternal", json_body=get_url_body)
+        upload_url = str(url_resp.get("upload_url") or "")
+        file_id = str(url_resp.get("file_id") or "")
+        if not upload_url or not file_id:
+            raise RuntimeError("files.getUploadURLExternal did not return upload_url or file_id")
+
+        # Step 2: PUT file bytes (no Bearer token)
+        with open(filepath, "rb") as f:
+            file_bytes = f.read()
+        put_req = urllib.request.Request(upload_url, data=file_bytes, method="PUT")
+        put_req.add_header("Content-Type", "application/octet-stream")
+        try:
+            with urllib.request.urlopen(put_req, timeout=60) as _resp:
+                pass
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", "replace")
+            raise RuntimeError(f"file upload PUT failed ({exc.code}): {details}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"file upload PUT request failed: {exc}") from exc
+
+        # Step 3: complete upload
+        file_entry: dict[str, str] = {"id": file_id}
+        if title:
+            file_entry["title"] = title
+        complete_body: dict[str, object] = {
+            "files": [file_entry],
+            "channel_id": channel_id,
+        }
+        if thread_ts:
+            complete_body["thread_ts"] = thread_ts
+        if initial_comment:
+            complete_body["initial_comment"] = initial_comment
+        return self.api_call("POST", "files.completeUploadExternal", json_body=complete_body)
+
     def download_private_file(self, url: str) -> bytes:
         headers = {"Authorization": f"Bearer {self._token}"}
         req = urllib.request.Request(url, headers=headers, method="GET")
