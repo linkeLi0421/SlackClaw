@@ -685,6 +685,54 @@ def run(argv: list[str] | None = None) -> int:
         auth_team=auth.get("team"),
     )
 
+    # --- Send startup banner to report channel ---
+    import os as _os
+    _app_name = "SlackClaw"
+    _home = Path.home()
+    if _os.name == "nt":
+        _cfg_dir = Path(_os.environ.get("APPDATA") or (_home / "AppData" / "Roaming")) / _app_name
+    elif sys.platform == "darwin":
+        _cfg_dir = _home / "Library" / "Application Support" / _app_name
+    else:
+        _cfg_dir = Path(_os.environ.get("XDG_CONFIG_HOME") or (_home / ".config")) / _app_name
+    _cfg_file = _cfg_dir / "config.json"
+
+    _startup_lines = [
+        f"*Config file:* `{_cfg_file}`",
+        f"*State DB:* `{config.state_db_path}`",
+        f"*Listener mode:* `{config.listener_mode}`",
+        f"*Run mode:* `{config.run_mode}`",
+        f"*Approval mode:* `{config.approval_mode}`",
+        f"*Dry run:* `{config.dry_run}`",
+        f"*Command channel:* <#{config.command_channel_id}>",
+        f"*Report channel:* <#{config.report_channel_id}>",
+        f"*Workers:* `{config.worker_processes}`",
+    ]
+    if config.dry_run:
+        _startup_lines.append(
+            "\n⚠️ *Dry-run mode is ON.* No commands will actually run. "
+            "Set `DRY_RUN=false` in your config and restart to enable real execution."
+        )
+
+    _banner_text = "\n".join(_startup_lines)
+    try:
+        client.chat_post_message(
+            channel_id=config.report_channel_id,
+            text=_banner_text,
+            blocks=[
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "SlackClaw is running"},
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": _banner_text},
+                },
+            ],
+        )
+    except Exception as exc:
+        _event("startup_banner_failed", error=str(exc))
+
     should_exit = False
 
     def _handle_signal(signum, _frame) -> None:

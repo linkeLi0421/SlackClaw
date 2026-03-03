@@ -301,6 +301,31 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 MIT. See `LICENSE`.
 
+## Roadmap
+
+Improvement ideas inspired by [OpenClaw](https://openclaw.ai/) and the [awesome-openclaw-usecases](https://github.com/hesamsheikh/awesome-openclaw-usecases) collection.
+
+### High Priority
+
+- [ ] **File Upload for Long Output** — When output exceeds Slack block limits, upload as a `.txt` or `.log` file snippet instead of truncating. Use Slack's `files.upload` API.
+- [ ] **Custom Skills / Aliases** — Let users define reusable named commands (e.g., `!do deploy-staging`) that map to multi-step scripts. Store in a `skills/` directory or config.
+- [ ] **Scheduled / Cron Tasks** — Support recurring commands (e.g., `!do every 6h: git pull && pytest`). Store schedules in SQLite, run a scheduler thread alongside the listener.
+- [ ] **Webhook Triggers** — Add a lightweight HTTP server that accepts POST requests to trigger tasks. Enables GitHub webhooks, CI/CD callbacks, and monitoring alerts.
+
+### Medium Priority
+
+- [ ] **Persistent Agent Memory** — Give AI agents a shared memory store beyond thread context so they can remember user preferences, project facts, and past decisions across threads.
+- [ ] **Proactive Notifications** — Monitor files, directories, or URLs and post alerts to Slack when changes are detected (file watcher + URL polling).
+- [ ] **Multi-Platform Support** — Abstract listener/reporter into a platform interface so Discord, Telegram, or Microsoft Teams can be added as alternative frontends.
+- [ ] **Browser Automation** — Integrate Playwright via a new command type (`BROWSE <url> <instruction>`) to scrape pages, fill forms, or capture screenshots.
+
+### Nice to Have
+
+- [ ] **RAG / Knowledge Base** — Vector search over local documents so agents can reference project docs, wikis, and past reports.
+- [ ] **Skill Auto-Creation** — Let AI agents autonomously define new skills from conversation (e.g., "remember this as `deploy-staging`").
+- [ ] **Multi-Agent Coordination** — Allow multiple agents to collaborate on a single task using parallel worktrees.
+- [ ] **Rich Report Formatting** — Support charts, tables, and inline images in Slack reports.
+
 ## Thanks
 
 - https://github.com/korotovsky/slack-mcp-server

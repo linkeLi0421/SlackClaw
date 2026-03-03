@@ -417,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     root = _app_dir()
     _load_dotenv(root / ".env")
     _apply_config_env(_load_json_config(cfg_path), override=True)
-    if force_setup or not _has_minimum_runtime_config():
+    if True:
         print("Launching local setup UI...", flush=True)
         if not _run_setup_server(cfg_path):
             print("Setup was not completed.", file=sys.stderr)

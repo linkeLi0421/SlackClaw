@@ -41,7 +41,11 @@ class TaskExecutor:
             return TaskExecutionResult(
                 status=TaskStatus.SUCCEEDED,
                 summary=f"dry-run only, no command executed for {task.task_id}",
-                details=f"planned command: {task.command_text}",
+                details=(
+                    f"planned command: {task.command_text}\n\n"
+                    "⚠️ *Dry-run mode is enabled.* No commands are actually executed. "
+                    "To run commands for real, set `DRY_RUN=false` in your config and restart SlackClaw."
+                ),
             )
 
         command = task.command_text
