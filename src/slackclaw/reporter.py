@@ -162,21 +162,34 @@ class Reporter:
 
             # Upload auto-filed output
             if use_auto_file and auto_file_path:
-                self._client.upload_file(
-                    channel_id=self._report_channel_id,
-                    filepath=auto_file_path,
-                    filename=f"{task.task_id}_output.txt",
-                    title=f"Full output for task {task.task_id}",
-                    initial_comment=f"Full output for task `{task.task_id}` (exceeded {self._file_output_threshold} chars)",
-                )
+                try:
+                    self._client.upload_file(
+                        channel_id=self._report_channel_id,
+                        filepath=auto_file_path,
+                        filename=f"{task.task_id}_output.txt",
+                        title=f"Full output for task {task.task_id}",
+                        initial_comment=f"Full output for task `{task.task_id}` (exceeded {self._file_output_threshold} chars)",
+                    )
+                except Exception as upload_exc:
+                    self._client.chat_post_message(
+                        channel_id=self._report_channel_id,
+                        text=f"⚠️ Failed to upload full output file for task `{task.task_id}`: {upload_exc}",
+                    )
 
             # Upload explicit file from result
             if result.upload_file_path:
-                self._client.upload_file(
-                    channel_id=self._report_channel_id,
-                    filepath=result.upload_file_path,
-                    title=f"File from task {task.task_id}",
-                )
+                try:
+                    self._client.upload_file(
+                        channel_id=self._report_channel_id,
+                        filepath=result.upload_file_path,
+                        filename=os.path.basename(result.upload_file_path),
+                        title=os.path.basename(result.upload_file_path),
+                    )
+                except Exception as upload_exc:
+                    self._client.chat_post_message(
+                        channel_id=self._report_channel_id,
+                        text=f"⚠️ Failed to upload file `{result.upload_file_path}` for task `{task.task_id}`: {upload_exc}",
+                    )
         finally:
             if auto_file_path:
                 try:

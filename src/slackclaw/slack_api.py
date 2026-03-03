@@ -136,30 +136,49 @@ class SlackWebClient:
             filename = os.path.basename(filepath)
         file_size = os.path.getsize(filepath)
 
-        # Step 1: get upload URL
-        get_url_body: dict[str, object] = {
-            "filename": filename,
-            "length": file_size,
-        }
-        url_resp = self.api_call("POST", "files.getUploadURLExternal", json_body=get_url_body)
+        # Step 1: get upload URL (form-encoded — JSON silently fails for this endpoint)
+        form_data = urllib.parse.urlencode({"filename": filename, "length": file_size}).encode("utf-8")
+        step1_req = urllib.request.Request(
+            "https://slack.com/api/files.getUploadURLExternal",
+            data=form_data,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(step1_req, timeout=30) as resp:
+                url_resp = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"files.getUploadURLExternal request failed: {exc}") from exc
+        if not url_resp.get("ok"):
+            raise RuntimeError(f"files.getUploadURLExternal failed: {url_resp.get('error', 'unknown')}")
         upload_url = str(url_resp.get("upload_url") or "")
         file_id = str(url_resp.get("file_id") or "")
         if not upload_url or not file_id:
             raise RuntimeError("files.getUploadURLExternal did not return upload_url or file_id")
 
-        # Step 2: PUT file bytes (no Bearer token)
+        # Step 2: POST file bytes to the upload URL (no Bearer token)
         with open(filepath, "rb") as f:
             file_bytes = f.read()
-        put_req = urllib.request.Request(upload_url, data=file_bytes, method="PUT")
-        put_req.add_header("Content-Type", "application/octet-stream")
+        boundary = "----SlackClawUploadBoundary"
+        body_parts = [
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n",
+        ]
+        body = body_parts[0].encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        post_req = urllib.request.Request(upload_url, data=body, method="POST")
+        post_req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
         try:
-            with urllib.request.urlopen(put_req, timeout=60) as _resp:
+            with urllib.request.urlopen(post_req, timeout=60) as _resp:
                 pass
         except urllib.error.HTTPError as exc:
             details = exc.read().decode("utf-8", "replace")
-            raise RuntimeError(f"file upload PUT failed ({exc.code}): {details}") from exc
+            raise RuntimeError(f"file upload POST failed ({exc.code}): {details}") from exc
         except Exception as exc:
-            raise RuntimeError(f"file upload PUT request failed: {exc}") from exc
+            raise RuntimeError(f"file upload POST request failed: {exc}") from exc
 
         # Step 3: complete upload
         file_entry: dict[str, str] = {"id": file_id}

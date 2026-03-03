@@ -13,6 +13,7 @@ class FakeClient:
         self.calls: list[tuple[str, str, list[dict] | None]] = []
         self.upload_calls: list[dict] = []
         self.error: Exception | None = None
+        self.upload_error: Exception | None = None
 
     def chat_post_message(
         self,
@@ -37,6 +38,8 @@ class FakeClient:
         thread_ts: str | None = None,
         initial_comment: str = "",
     ) -> dict:
+        if self.upload_error is not None:
+            raise self.upload_error
         self.upload_calls.append(
             {
                 "channel_id": channel_id,
@@ -188,6 +191,33 @@ class ReporterTests(unittest.TestCase):
             upload = client.upload_calls[0]
             self.assertEqual(upload["filepath"], filepath)
             self.assertEqual(upload["channel_id"], "C_REPORT")
+        finally:
+            os.unlink(filepath)
+
+
+    def test_upload_failure_posts_warning_instead_of_crashing(self) -> None:
+        client = FakeClient()
+        client.upload_error = RuntimeError("missing_scope: files:write")
+        reporter = Reporter(client=client, report_channel_id="C_REPORT")
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
+            f.write(b"col1,col2\n1,2\n")
+            filepath = f.name
+        try:
+            result = TaskExecutionResult(
+                status=TaskStatus.SUCCEEDED,
+                summary="file ready",
+                details=f"uploading {filepath}",
+                upload_file_path=filepath,
+            )
+            # Should NOT raise — upload failure is handled gracefully
+            reporter.report(self._task(), result)
+
+            # Text report posted + warning message about upload failure
+            self.assertEqual(len(client.calls), 2)
+            warning_text = client.calls[1][1]
+            self.assertIn("Failed to upload file", warning_text)
+            self.assertIn("missing_scope", warning_text)
+            self.assertEqual(len(client.upload_calls), 0)
         finally:
             os.unlink(filepath)
 
