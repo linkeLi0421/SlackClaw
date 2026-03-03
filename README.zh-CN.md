@@ -25,6 +25,7 @@ Slack 命令频道              你的本地机器               Slack 报告频
 2. SlackClaw 识别命令（可选：先走表情审批）
 3. 命令在本机执行
 4. 报告发回 Slack 报告频道
+5. 本地 **Dashboard** 实时显示任务状态、队列和配置，地址为 `http://127.0.0.1:<port>`
 
 ## 快速开始
 
@@ -34,7 +35,7 @@ Slack 命令频道              你的本地机器               Slack 报告频
 
 - 开启 **Socket Mode**，创建 `connections:write` 的 app-level token
 - 开启 **Event Subscriptions**，订阅：`message.channels`、`message.groups`、`reaction_added`
-- 添加 **OAuth Bot Scopes**：`chat:write`、`channels:history`、`groups:history`、`files:read`
+- 添加 **OAuth Bot Scopes**：`chat:write`、`channels:history`、`groups:history`、`files:read`、`files:write`
 - 安装到工作区
 - 在命令频道和报告频道邀请机器人：`/invite @your-bot`
 
@@ -84,6 +85,7 @@ Windows (PowerShell):
 | `CLAUDE` | 调用 Claude CLI |
 | `CODEX` | 调用 Codex CLI |
 | `KIMI` | 调用 Kimi CLI |
+| `FILE` | 上传本地文件到 Slack |
 
 示例：
 ```
@@ -92,24 +94,30 @@ SHELL pytest tests/ -v
 CLAUDE review this repo and list top 3 issues
 CODEX fix failing tests and summarize changes
 KIMI how can I improve this codebase
+FILE /path/to/report.csv
 ```
 
 也支持显式格式：
 ```
 !do sh:echo hello
+!do file:/tmp/output.log
 ```
 
-### 图片附件
+### 文件附件
 
-你可以在同一条 Slack 消息里上传图片并附带命令：
+你可以在同一条 Slack 消息里上传文件（图片、PDF、CSV 等）并附带命令：
 ```
 KIMI describe this screenshot
-CLAUDE what's wrong with this UI
+CLAUDE analyze this data
 ```
 
-- 每条任务最多 4 张图
-- 单图最大 20MB
-- 图片会下载到本地，并把路径注入给 Agent
+- 每条任务最多 4 个文件，单文件最大 20MB
+- 支持任意文件类型（图片、PDF、文本、压缩包等）
+- 文件会下载到本地，并把路径注入给 Agent
+
+### 大输出自动转文件
+
+当命令输出超过 `FILE_OUTPUT_THRESHOLD`（默认 4000 字符）时，完整输出会自动作为 `.txt` 文件上传，而不是被截断。内联仍显示简短预览。
 
 ### 审批流程
 
@@ -123,6 +131,20 @@ CLAUDE what's wrong with this UI
 `CLAUDE` / `CODEX` / `KIMI` 使用线程上下文：
 - 同一 Slack 线程内会复用上下文
 - 不同线程可并行（`WORKER_PROCESSES>1`）
+
+## Dashboard（仪表盘）
+
+SlackClaw 启动时会自动开启本地 Web 仪表盘，启动日志中会打印访问地址（如 `http://127.0.0.1:8391`）。页面每 5 秒自动刷新，展示：
+
+- **统计概览** — 任务总数、各状态计数、队列大小、正在执行数
+- **运行配置** — 当前运行时设置（Token 已隐藏）
+- **任务列表** — 历史任务及状态、命令、用户、时间戳
+- **执行中 / 队列** — 正在执行或排队中的任务
+- **Agent 会话** — Claude/Codex/Kimi 的线程会话
+- **审批记录** — 待处理和已完成的审批请求
+- **执行锁** — 当前持有的锁
+
+设置 `DASHBOARD_PORT` 可指定端口（默认 `0`，即随机可用端口）。
 
 ## 配置项说明
 
@@ -143,6 +165,7 @@ CLAUDE what's wrong with this UI
 | `EXEC_TIMEOUT_SECONDS` | `120` | 单任务超时秒数 |
 | `WORKER_PROCESSES` | `1` | 并行工作进程数 |
 | `RUN_MODE` | `approve` | `approve` 需审批，`run` 直接执行 |
+| `DASHBOARD_PORT` | `0` | 本地仪表盘端口（`0` 为随机可用端口） |
 
 ### 监听与触发
 
@@ -181,6 +204,7 @@ CLAUDE what's wrong with this UI
 | `REPORT_INPUT_MAX_CHARS` | `500` | Input 最大长度 |
 | `REPORT_SUMMARY_MAX_CHARS` | `1200` | Summary 最大长度 |
 | `REPORT_DETAILS_MAX_CHARS` | `4000` | Details 最大长度 |
+| `FILE_OUTPUT_THRESHOLD` | `4000` | 输出超过此字符数时自动上传为文件 |
 
 ## 打包说明
 

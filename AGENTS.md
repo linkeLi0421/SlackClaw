@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `src/slackclaw/` contains runtime modules:
   - `app.py` orchestration loop, approval flow, attachment prep
-  - `decider.py` trigger parsing (`SHELL`, `KIMI`, `CODEX`, `CLAUDE`, prefix/mention)
+  - `decider.py` trigger parsing (`SHELL`, `KIMI`, `CODEX`, `CLAUDE`, `FILE`, prefix/mention)
   - `executor.py` command execution and agent integrations
   - `listener.py`, `slack_api.py`, `state_store.py`, `reporter.py`
 - `tests/` mirrors runtime behavior with `unittest` files like `test_executor.py`, `test_app_images.py`.
@@ -42,5 +42,5 @@
 
 ## Security & Configuration Tips
 - Never commit tokens or real `.env` values.
-- For attachment workflows, ensure Slack bot scope `files:read` is present.
+- For attachment workflows, ensure Slack bot scopes `files:read` and `files:write` are present.
 - Treat `sh:` commands as privileged; prefer `APPROVAL_MODE=reaction` outside local experiments.

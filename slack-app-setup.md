@@ -35,7 +35,8 @@ Go to your app's settings page. If you don't have one yet, click **Create New Ap
   - `chat:write` — post messages and reports
   - `channels:history` — read command channel messages
   - `groups:history` — read private channel messages
-  - `files:read` — download image attachments
+  - `files:read` — download file attachments
+  - `files:write` — upload files to Slack (for file commands and auto-filed large output)
 
 ## 6. Install the App
 
@@ -70,7 +71,7 @@ set -a; source .env; set +a
 
 After setup:
 
-- New `SHELL ...` / `CLAUDE ...` / etc. messages in the command channel are detected automatically.
+- New `SHELL ...` / `CLAUDE ...` / `FILE ...` / etc. messages in the command channel are detected automatically.
 - With `APPROVAL_MODE=reaction`, non-allowlisted shell commands pause for emoji approval.
 - React :white_check_mark: to approve or :x: to reject.
 - Allowlisted commands and agent commands run according to `RUN_MODE`.
@@ -81,4 +82,4 @@ After setup:
 - **Bot not responding** — make sure the bot is invited to the command channel and `COMMAND_CHANNEL_ID` is correct.
 - **"not_authed" errors** — verify `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are set correctly.
 - **No reactions detected** — ensure `reaction_added` is subscribed under Event Subscriptions, and the app is reinstalled after adding it.
-- **Image commands failing** — confirm the `files:read` scope is added and the app is reinstalled.
+- **Image/file commands failing** — confirm the `files:read` and `files:write` scopes are added and the app is reinstalled.

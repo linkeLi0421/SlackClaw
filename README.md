@@ -87,6 +87,7 @@ A general-purpose task showing Kimi CLI integration. Ask questions, get summarie
 2. SlackClaw detects it, optionally waits for emoji approval
 3. The command runs locally on your machine
 4. A formatted report appears in the Slack **report channel**
+5. A **local dashboard** shows live task status, queue, and config at `http://127.0.0.1:<port>`
 
 ## Quick Start
 
@@ -96,7 +97,7 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app:
 
 - **Socket Mode** — enable it, then create an app-level token with `connections:write` scope
 - **Event Subscriptions** — enable and subscribe to bot events: `message.channels`, `message.groups`, `reaction_added`
-- **OAuth Bot Scopes** — add: `chat:write`, `channels:history`, `groups:history`, `files:read`
+- **OAuth Bot Scopes** — add: `chat:write`, `channels:history`, `groups:history`, `files:read`, `files:write`
 - **Install** the app to your workspace
 - **Invite** the bot to your command and report channels: `/invite @your-bot`
 
@@ -134,6 +135,7 @@ Send messages in your command channel. SlackClaw recognizes four command types:
 | `CLAUDE` | Sends a prompt to Claude Code CLI |
 | `CODEX` | Sends a prompt to Codex CLI |
 | `KIMI` | Sends a prompt to Kimi CLI |
+| `FILE` | Uploads a local file to Slack |
 
 Examples you type in Slack:
 ```
@@ -142,23 +144,30 @@ SHELL pytest tests/ -v
 CLAUDE review this repo and list top 3 issues
 CODEX fix failing tests and summarize changes
 KIMI how can I improve this codebase
+FILE /path/to/report.csv
 ```
 
 You can also use the explicit prefix form:
 ```
 !do sh:echo hello
+!do file:/tmp/output.log
 ```
 
-### Image Attachments
+### File Attachments
 
-Upload images alongside your command in the same Slack message:
+Upload files (images, PDFs, CSVs, etc.) alongside your command in the same Slack message:
 ```
 KIMI describe this screenshot
-CLAUDE what's wrong with this UI
+CLAUDE analyze this data
 ```
 
-- Up to 4 images per message, 20 MB max each
-- Images are downloaded locally and passed to the agent as file paths
+- Up to 4 files per message, 20 MB max each
+- Any file type is supported (images, PDFs, text, archives, etc.)
+- Files are downloaded locally and passed to the agent as file paths
+
+### Auto-Filed Large Output
+
+When command output exceeds `FILE_OUTPUT_THRESHOLD` (default 4000 chars), the full output is automatically uploaded as a `.txt` file instead of being truncated. A short preview is still shown inline.
 
 ### Approval Flow
 
@@ -173,6 +182,20 @@ With `APPROVAL_MODE=reaction` (default):
 CLAUDE, CODEX, and KIMI commands are thread-aware:
 - Replies in the same Slack thread share agent context
 - Different threads run independently (parallel when `WORKER_PROCESSES>1`)
+
+## Dashboard
+
+SlackClaw starts a local web dashboard automatically on every run. The URL is printed at startup (e.g. `http://127.0.0.1:8391`). The dashboard auto-refreshes every 5 seconds and shows:
+
+- **Stats** — total/pending/running/succeeded/failed task counts, queue size, in-flight count
+- **Configuration** — current runtime settings (tokens are hidden)
+- **Recent Tasks** — task history with status, command, user, timestamps
+- **In-Flight / Queue** — tasks currently executing or waiting
+- **Agent Sessions** — active thread-bound sessions for Claude/Codex/Kimi
+- **Approvals** — pending and resolved approval requests
+- **Execution Locks** — currently held lock keys
+
+Set `DASHBOARD_PORT` to bind to a specific port (default: random available port, `0`).
 
 ## Configuration Reference
 
@@ -193,6 +216,7 @@ CLAUDE, CODEX, and KIMI commands are thread-aware:
 | `EXEC_TIMEOUT_SECONDS` | `120` | Max seconds per command |
 | `WORKER_PROCESSES` | `1` | Number of parallel workers |
 | `RUN_MODE` | `approve` | `approve` = wait for approval; `run` = execute immediately |
+| `DASHBOARD_PORT` | `0` | Port for the local dashboard (`0` = random available port) |
 
 ### Listener & Trigger
 
@@ -231,6 +255,7 @@ CLAUDE, CODEX, and KIMI commands are thread-aware:
 | `REPORT_INPUT_MAX_CHARS` | `500` | Max chars for input section |
 | `REPORT_SUMMARY_MAX_CHARS` | `1200` | Max chars for summary section |
 | `REPORT_DETAILS_MAX_CHARS` | `4000` | Max chars for details section |
+| `FILE_OUTPUT_THRESHOLD` | `4000` | Auto-upload output as file when exceeding this char count |
 
 ## Packaging
 
@@ -307,7 +332,7 @@ Improvement ideas inspired by [OpenClaw](https://openclaw.ai/) and the [awesome-
 
 ### High Priority
 
-- [ ] **File Upload for Long Output** — When output exceeds Slack block limits, upload as a `.txt` or `.log` file snippet instead of truncating. Use Slack's `files.upload` API.
+- [x] **File Upload for Long Output** — When output exceeds `FILE_OUTPUT_THRESHOLD`, automatically upload as a `.txt` file. Also supports `FILE <path>` command to upload local files directly.
 - [ ] **Custom Skills / Aliases** — Let users define reusable named commands (e.g., `!do deploy-staging`) that map to multi-step scripts. Store in a `skills/` directory or config.
 - [ ] **Scheduled / Cron Tasks** — Support recurring commands (e.g., `!do every 6h: git pull && pytest`). Store schedules in SQLite, run a scheduler thread alongside the listener.
 - [ ] **Webhook Triggers** — Add a lightweight HTTP server that accepts POST requests to trigger tasks. Enables GitHub webhooks, CI/CD callbacks, and monitoring alerts.
