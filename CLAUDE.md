@@ -79,6 +79,8 @@ Config loads from JSON file (`~/.config/SlackClaw/config.json` on Linux, platfor
 
 **Required:** `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` (socket mode), `COMMAND_CHANNEL_ID`, `REPORT_CHANNEL_ID`
 
+**Required Bot OAuth Scopes:** `chat:write`, `channels:history`, `groups:history`, `files:read`, `files:write`. After adding or changing scopes, the app must be reinstalled to the workspace for the token to reflect the new scopes.
+
 **Key defaults:** `DRY_RUN=true`, `LISTENER_MODE=socket`, `APPROVAL_MODE=reaction`, `WORKER_PROCESSES=1`, `EXEC_TIMEOUT_SECONDS=120`, `FILE_OUTPUT_THRESHOLD=4000`
 
 ## Commits
