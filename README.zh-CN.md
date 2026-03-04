@@ -18,6 +18,7 @@ Slack 命令频道              你的本地机器               Slack 报告频
 │ CLAUDE fix tests│     │ 在本地执行命令       │     │ 状态/输出/详情      │
 │ CODEX refactor  │     │ 然后回传执行结果     │     │                     │
 │ KIMI explain    │     │                      │     │                     │
+│ MEMORY store .. │     │                      │     │                     │
 └─────────────────┘     └──────────────────────┘     └─────────────────────┘
 ```
 
@@ -86,6 +87,7 @@ Windows (PowerShell):
 | `CODEX` | 调用 Codex CLI |
 | `KIMI` | 调用 Kimi CLI |
 | `FILE` | 上传本地文件到 Slack |
+| `MEMORY` | 存储、检索和管理持久化记忆 |
 
 示例：
 ```
@@ -95,6 +97,8 @@ CLAUDE review this repo and list top 3 issues
 CODEX fix failing tests and summarize changes
 KIMI how can I improve this codebase
 FILE /path/to/report.csv
+MEMORY store 项目使用 Python 3.11
+MEMORY recall 部署流程
 ```
 
 也支持显式格式：
@@ -132,15 +136,43 @@ CLAUDE analyze this data
 - 同一 Slack 线程内会复用上下文
 - 不同线程可并行（`WORKER_PROCESSES>1`）
 
+### 持久化记忆
+
+当 `MEMORY_ENABLED=true` 时，AI Agent 可以跨对话记住事实、偏好和流程。记忆以 Markdown 文件存储（人类可读、可 git 追踪），并通过 SQLite FTS5 全文索引实现快速 BM25 排序检索。
+
+**手动命令：**
+```
+MEMORY store 项目使用 Python 3.11               # 存储用户级别记忆
+MEMORY store workspace:部署使用 Docker          # 存储工作区级别记忆
+MEMORY recall 部署流程                          # 按关键词搜索记忆
+MEMORY forget a1b2c3d4e5f6g7h8                 # 按 ID 删除指定记忆
+MEMORY list                                     # 列出你最近的记忆
+```
+
+**自动提示注入：** 运行 CLAUDE/CODEX/KIMI 命令时，相关记忆会自动检索并注入到提示词中，让 Agent 拥有跨会话的上下文。
+
+**自动提取：** 当 `MEMORY_AUTO_EXTRACT=true` 时，Agent 可以在输出中用 `[MEMORY]: ...` 或 `[REMEMBER]: ...` 标记事实，系统会自动保存供未来检索。
+
+**存储目录：**
+```
+~/.config/SlackClaw/memory/
+  user/<user_id>/       # 用户记忆
+  workspace/            # 共享工作区记忆
+  thread/<channel>_<ts>/ # 线程级别记忆
+```
+
+超过 `MEMORY_RETENTION_DAYS`（默认 90 天）未访问的记忆会自动清理。
+
 ## Dashboard（仪表盘）
 
 SlackClaw 启动时会自动开启本地 Web 仪表盘，启动日志中会打印访问地址（如 `http://127.0.0.1:8391`）。页面每 5 秒自动刷新，展示：
 
-- **统计概览** — 任务总数、各状态计数、队列大小、正在执行数
+- **统计概览** — 任务总数、各状态计数、队列大小、正在执行数、记忆数
 - **运行配置** — 当前运行时设置（Token 已隐藏）
 - **任务列表** — 历史任务及状态、命令、用户、时间戳
 - **执行中 / 队列** — 正在执行或排队中的任务
 - **Agent 会话** — Claude/Codex/Kimi 的线程会话
+- **记忆** — 按作用域统计的记忆数量（启用记忆功能时）
 - **审批记录** — 待处理和已完成的审批请求
 - **执行锁** — 当前持有的锁
 
@@ -196,6 +228,17 @@ SlackClaw 启动时会自动开启本地 Web 仪表盘，启动日志中会打�
 | `CODEX_SANDBOX_MODE` | `workspace-write` | `workspace-write` / `read-only` / `danger-full-access` |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Claude `--permission-mode` 值 |
 | `AGENT_RESPONSE_INSTRUCTION` | Markdown 提示词 | 结果格式指令；留空可关闭 |
+
+### 记忆
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MEMORY_ENABLED` | `false` | 启用持久化记忆系统 |
+| `MEMORY_MAX_PER_SCOPE` | `100` | 每个作用域的最大记忆数 |
+| `MEMORY_RETENTION_DAYS` | `90` | 超过此天数未访问的记忆自动清理 |
+| `MEMORY_INJECTION_MAX_CHARS` | `2000` | 注入提示词的记忆上下文最大字符数 |
+| `MEMORY_AUTO_EXTRACT` | `false` | 自动提取 Agent 输出中的 `[MEMORY]:` 标签 |
+| `MEMORY_DIR` | *（平台配置目录）* | 记忆 `.md` 文件的自定义存储路径 |
 
 ### 报告长度
 

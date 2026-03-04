@@ -2,9 +2,10 @@
 
 ## Project Structure & Module Organization
 - `src/slackclaw/` contains runtime modules:
-  - `app.py` orchestration loop, approval flow, attachment prep
-  - `decider.py` trigger parsing (`SHELL`, `KIMI`, `CODEX`, `CLAUDE`, `FILE`, prefix/mention)
-  - `executor.py` command execution and agent integrations
+  - `app.py` orchestration loop, approval flow, attachment prep, memory purge
+  - `decider.py` trigger parsing (`SHELL`, `KIMI`, `CODEX`, `CLAUDE`, `FILE`, `MEMORY`, prefix/mention)
+  - `executor.py` command execution, agent integrations, memory command routing
+  - `memory.py` persistent memory: Markdown file storage, FTS5 search, prompt injection, auto-extraction
   - `listener.py`, `slack_api.py`, `state_store.py`, `reporter.py`
 - `tests/` mirrors runtime behavior with `unittest` files like `test_executor.py`, `test_app_images.py`.
 - `scripts/run_agent.sh` is the local entrypoint.

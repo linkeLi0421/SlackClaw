@@ -14,6 +14,7 @@ _SIMPLE_KIMI_RE = re.compile(r"^kimi\s+(.+)$", re.IGNORECASE)
 _SIMPLE_CODEX_RE = re.compile(r"^codex\s+(.+)$", re.IGNORECASE)
 _SIMPLE_CLAUDE_RE = re.compile(r"^claude\s+(.+)$", re.IGNORECASE)
 _SIMPLE_FILE_RE = re.compile(r"^file\s+(.+)$", re.IGNORECASE)
+_SIMPLE_MEMORY_RE = re.compile(r"^memory\s+(.+)$", re.IGNORECASE)
 _THREAD_LOCAL_COMMAND_PREFIXES = ("kimi:", "codex:", "claude:")
 
 
@@ -85,6 +86,12 @@ def _parse_simple_command(text: str) -> str | None:
         filepath = file_match.group(1).strip()
         if filepath:
             return f"file:{filepath}"
+
+    memory_match = _SIMPLE_MEMORY_RE.match(text)
+    if memory_match:
+        args = memory_match.group(1).strip()
+        if args:
+            return f"memory:{args}"
 
     return None
 

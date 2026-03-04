@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from slackclaw.models import ApprovalStatus, TaskStatus
+from slackclaw.models import ApprovalStatus, MemoryCategory, MemoryRecord, MemoryScope, TaskStatus
 from slackclaw.state_store import StateStore
 
 
@@ -228,6 +228,192 @@ class StateStoreTests(unittest.TestCase):
             # Should not raise for a nonexistent task
             store.store_task_result("no-such-task", "summary", "details")
             self.assertIsNone(store.get_task("no-such-task"))
+            store.close()
+
+
+    # --- Memory tests ---
+
+    def test_memory_upsert_and_retrieve(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            record = MemoryRecord(
+                memory_id="mem-1",
+                scope=MemoryScope.USER,
+                scope_key="U1",
+                category=MemoryCategory.FACT,
+                content="Python 3.11 is used",
+                file_path="/tmp/mem-1.md",
+                source_task_id="t1",
+                source_agent="claude",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            )
+            store.upsert_memory(record)
+            retrieved = store.get_memory("mem-1")
+            self.assertIsNotNone(retrieved)
+            assert retrieved is not None
+            self.assertEqual(retrieved.memory_id, "mem-1")
+            self.assertEqual(retrieved.scope, MemoryScope.USER)
+            self.assertEqual(retrieved.content, "Python 3.11 is used")
+            store.close()
+
+    def test_memory_fts5_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            for i, content in enumerate(["Python 3.11 async await", "Docker container deploy", "Redis cache layer"]):
+                store.upsert_memory(MemoryRecord(
+                    memory_id=f"mem-{i}",
+                    scope=MemoryScope.USER,
+                    scope_key="U1",
+                    category=MemoryCategory.FACT,
+                    content=content,
+                    file_path=f"/tmp/mem-{i}.md",
+                    created_at="2026-01-01T00:00:00+00:00",
+                    updated_at="2026-01-01T00:00:00+00:00",
+                    last_accessed_at="2026-01-01T00:00:00+00:00",
+                ))
+            results = store.search_memories(scope_keys=["U1"], query="Python", limit=10)
+            self.assertTrue(len(results) >= 1)
+            self.assertTrue(any("Python" in r.content for r in results))
+            store.close()
+
+    def test_memory_search_across_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-u1",
+                scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.FACT, content="user note about deployment",
+                file_path="/tmp/u1.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-ws",
+                scope=MemoryScope.WORKSPACE, scope_key="workspace",
+                category=MemoryCategory.PROCEDURE, content="workspace deployment procedure",
+                file_path="/tmp/ws.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            results = store.search_memories(scope_keys=["U1", "workspace"], query="deployment", limit=10)
+            self.assertEqual(len(results), 2)
+            store.close()
+
+    def test_memory_touch_access(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-1", scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.FACT, content="test", file_path="/tmp/m.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            store.touch_memory_access("mem-1")
+            record = store.get_memory("mem-1")
+            assert record is not None
+            self.assertEqual(record.access_count, 1)
+            store.touch_memory_access("mem-1")
+            record = store.get_memory("mem-1")
+            assert record is not None
+            self.assertEqual(record.access_count, 2)
+            store.close()
+
+    def test_memory_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-del", scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.NOTE, content="delete me", file_path="/tmp/d.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            self.assertTrue(store.delete_memory("mem-del"))
+            self.assertIsNone(store.get_memory("mem-del"))
+            self.assertFalse(store.delete_memory("mem-del"))
+            store.close()
+
+    def test_memory_purge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-old", scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.FACT, content="old fact", file_path="/tmp/old.md",
+                created_at="2020-01-01T00:00:00+00:00",
+                updated_at="2020-01-01T00:00:00+00:00",
+                last_accessed_at="2020-01-01T00:00:00+00:00",
+            ))
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-new", scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.FACT, content="new fact", file_path="/tmp/new.md",
+                created_at="2026-03-01T00:00:00+00:00",
+                updated_at="2026-03-01T00:00:00+00:00",
+                last_accessed_at="2026-03-01T00:00:00+00:00",
+            ))
+            purged = store.purge_old_memories(90)
+            self.assertEqual(len(purged), 1)
+            self.assertIn("/tmp/old.md", purged)
+            self.assertIsNone(store.get_memory("mem-old"))
+            self.assertIsNotNone(store.get_memory("mem-new"))
+            store.close()
+
+    def test_memory_count_by_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            for i in range(3):
+                store.upsert_memory(MemoryRecord(
+                    memory_id=f"mem-u-{i}", scope=MemoryScope.USER, scope_key="U1",
+                    category=MemoryCategory.FACT, content=f"fact {i}", file_path=f"/tmp/u{i}.md",
+                    created_at="2026-01-01T00:00:00+00:00",
+                    updated_at="2026-01-01T00:00:00+00:00",
+                    last_accessed_at="2026-01-01T00:00:00+00:00",
+                ))
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-ws", scope=MemoryScope.WORKSPACE, scope_key="workspace",
+                category=MemoryCategory.NOTE, content="ws note", file_path="/tmp/ws.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            counts = store.count_memories_by_scope()
+            self.assertEqual(counts.get("U1"), 3)
+            self.assertEqual(counts.get("workspace"), 1)
+            self.assertEqual(store.count_memories_total(), 4)
+            store.close()
+
+    def test_memory_list_by_scope_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-a", scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.FACT, content="A", file_path="/tmp/a.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-b", scope=MemoryScope.USER, scope_key="U2",
+                category=MemoryCategory.FACT, content="B", file_path="/tmp/b.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            u1_mems = store.list_memories("U1")
+            self.assertEqual(len(u1_mems), 1)
+            self.assertEqual(u1_mems[0].memory_id, "mem-a")
             store.close()
 
 

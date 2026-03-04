@@ -5,7 +5,16 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import ApprovalStatus, TERMINAL_TASK_STATUSES, TaskApprovalRecord, TaskRecord, TaskStatus
+from .models import (
+    ApprovalStatus,
+    MemoryCategory,
+    MemoryRecord,
+    MemoryScope,
+    TERMINAL_TASK_STATUSES,
+    TaskApprovalRecord,
+    TaskRecord,
+    TaskStatus,
+)
 
 
 def _utc_now() -> str:
@@ -97,8 +106,68 @@ class StateStore:
 
             CREATE INDEX IF NOT EXISTS idx_agent_sessions_lookup
               ON agent_sessions(channel_id, thread_ts, agent);
+
+            CREATE TABLE IF NOT EXISTS memories (
+              memory_id TEXT PRIMARY KEY,
+              scope TEXT NOT NULL,
+              scope_key TEXT NOT NULL,
+              category TEXT NOT NULL,
+              content TEXT NOT NULL,
+              file_path TEXT NOT NULL,
+              source_task_id TEXT NOT NULL DEFAULT '',
+              source_agent TEXT NOT NULL DEFAULT '',
+              access_count INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              last_accessed_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memories_scope
+              ON memories(scope, scope_key);
             """
         )
+        # FTS5 virtual table must be created outside executescript because
+        # CREATE VIRTUAL TABLE is not supported inside executescript on all
+        # SQLite builds.  Use separate execute calls guarded by IF NOT EXISTS.
+        try:
+            self._conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    content,
+                    content=memories,
+                    content_rowid=rowid,
+                    tokenize='porter unicode61'
+                )
+                """
+            )
+        except Exception:
+            # FTS5 not available – search will fall back to LIKE queries
+            pass
+
+        # Triggers to keep FTS in sync (silently skip if FTS5 table missing)
+        for trigger_sql in [
+            """
+            CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+            END
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            END
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+                INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+            END
+            """,
+        ]:
+            try:
+                self._conn.execute(trigger_sql)
+            except Exception:
+                pass
+
         self._conn.commit()
 
     def get_checkpoint(self, key: str) -> str | None:
@@ -525,6 +594,167 @@ class StateStore:
             "SELECT key, value FROM checkpoint ORDER BY key"
         ).fetchall()
         return [{"key": str(row["key"]), "value": str(row["value"])} for row in rows]
+
+    # --- Memory methods ---
+
+    def upsert_memory(self, record: MemoryRecord) -> None:
+        now = _utc_now()
+        self._conn.execute(
+            """
+            INSERT INTO memories(
+                memory_id, scope, scope_key, category, content, file_path,
+                source_task_id, source_agent, access_count,
+                created_at, updated_at, last_accessed_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(memory_id) DO UPDATE SET
+                content = excluded.content,
+                file_path = excluded.file_path,
+                category = excluded.category,
+                source_task_id = excluded.source_task_id,
+                source_agent = excluded.source_agent,
+                updated_at = excluded.updated_at
+            """,
+            (
+                record.memory_id,
+                record.scope.value,
+                record.scope_key,
+                record.category.value,
+                record.content,
+                record.file_path,
+                record.source_task_id,
+                record.source_agent,
+                record.access_count,
+                record.created_at or now,
+                now,
+                record.last_accessed_at or now,
+            ),
+        )
+        self._conn.commit()
+
+    def get_memory(self, memory_id: str) -> MemoryRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM memories WHERE memory_id = ?", (memory_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._memory_record_from_row(row)
+
+    def list_memories(self, scope_key: str, *, limit: int = 50) -> list[MemoryRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM memories WHERE scope_key = ? ORDER BY updated_at DESC LIMIT ?",
+            (scope_key, limit),
+        ).fetchall()
+        return [self._memory_record_from_row(r) for r in rows]
+
+    def search_memories(
+        self,
+        *,
+        scope_keys: list[str],
+        query: str,
+        limit: int = 10,
+    ) -> list[MemoryRecord]:
+        if not scope_keys or not query.strip():
+            return []
+
+        # Try FTS5 first
+        try:
+            placeholders = ",".join("?" for _ in scope_keys)
+            sql = f"""
+                SELECT m.*
+                FROM memories_fts mf
+                JOIN memories m ON mf.rowid = m.rowid
+                WHERE mf.memories_fts MATCH ?
+                  AND m.scope_key IN ({placeholders})
+                ORDER BY mf.rank
+                LIMIT ?
+            """
+            params: list = [query] + scope_keys + [limit]
+            rows = self._conn.execute(sql, params).fetchall()
+            return [self._memory_record_from_row(r) for r in rows]
+        except Exception:
+            # FTS5 not available – fall back to LIKE
+            placeholders = ",".join("?" for _ in scope_keys)
+            like_pattern = f"%{query}%"
+            sql = f"""
+                SELECT * FROM memories
+                WHERE scope_key IN ({placeholders})
+                  AND content LIKE ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """
+            params = scope_keys + [like_pattern, limit]
+            rows = self._conn.execute(sql, params).fetchall()
+            return [self._memory_record_from_row(r) for r in rows]
+
+    def touch_memory_access(self, memory_id: str) -> None:
+        self._conn.execute(
+            """
+            UPDATE memories
+            SET access_count = access_count + 1,
+                last_accessed_at = ?
+            WHERE memory_id = ?
+            """,
+            (_utc_now(), memory_id),
+        )
+        self._conn.commit()
+
+    def delete_memory(self, memory_id: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM memories WHERE memory_id = ?", (memory_id,)
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def delete_memories_by_scope(self, scope_key: str) -> int:
+        cur = self._conn.execute(
+            "DELETE FROM memories WHERE scope_key = ?", (scope_key,)
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def purge_old_memories(self, retention_days: int) -> list[str]:
+        from datetime import timedelta
+        cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+        rows = self._conn.execute(
+            "SELECT memory_id, file_path FROM memories WHERE last_accessed_at < ?",
+            (cutoff,),
+        ).fetchall()
+        ids = [str(r["memory_id"]) for r in rows]
+        paths = [str(r["file_path"]) for r in rows]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            self._conn.execute(
+                f"DELETE FROM memories WHERE memory_id IN ({placeholders})", ids
+            )
+            self._conn.commit()
+        return paths
+
+    def count_memories_by_scope(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            "SELECT scope_key, COUNT(*) as cnt FROM memories GROUP BY scope_key"
+        ).fetchall()
+        return {str(r["scope_key"]): int(r["cnt"]) for r in rows}
+
+    def count_memories_total(self) -> int:
+        row = self._conn.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()
+        return int(row["cnt"]) if row else 0
+
+    @staticmethod
+    def _memory_record_from_row(row: sqlite3.Row) -> MemoryRecord:
+        return MemoryRecord(
+            memory_id=str(row["memory_id"]),
+            scope=MemoryScope(str(row["scope"])),
+            scope_key=str(row["scope_key"]),
+            category=MemoryCategory(str(row["category"])),
+            content=str(row["content"]),
+            file_path=str(row["file_path"]),
+            source_task_id=str(row["source_task_id"]),
+            source_agent=str(row["source_agent"]),
+            access_count=int(row["access_count"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            last_accessed_at=str(row["last_accessed_at"]),
+        )
 
     @staticmethod
     def _approval_record_from_row(row: sqlite3.Row) -> TaskApprovalRecord:

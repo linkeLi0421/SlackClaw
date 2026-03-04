@@ -4,6 +4,35 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+class MemoryScope(str, Enum):
+    USER = "user"
+    THREAD = "thread"
+    WORKSPACE = "workspace"
+
+
+class MemoryCategory(str, Enum):
+    FACT = "fact"
+    PREFERENCE = "preference"
+    PROCEDURE = "procedure"
+    NOTE = "note"
+
+
+@dataclass(frozen=True)
+class MemoryRecord:
+    memory_id: str
+    scope: MemoryScope
+    scope_key: str
+    category: MemoryCategory
+    content: str
+    file_path: str
+    source_task_id: str = ""
+    source_agent: str = ""
+    access_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+    last_accessed_at: str = ""
+
+
 class TaskStatus(str, Enum):
     PENDING = "pending"
     WAITING_APPROVAL = "waiting_approval"

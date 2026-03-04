@@ -284,5 +284,84 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("invalid file command", result.summary)
 
 
+    def test_memory_command_disabled(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30, memory_enabled=False)
+        result = executor.execute(_task("memory:store hello world"))
+        self.assertEqual(result.status, TaskStatus.FAILED)
+        self.assertIn("disabled", result.summary)
+
+    def test_memory_command_enabled_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            mem_dir = str(Path(tmpdir) / "mem")
+            executor = TaskExecutor(
+                dry_run=False, timeout_seconds=30,
+                memory_enabled=True, memory_dir=mem_dir,
+            )
+            result = executor.execute(_task("memory:store project uses Python"), store=store)
+            self.assertEqual(result.status, TaskStatus.SUCCEEDED)
+            self.assertIn("memory stored", result.summary)
+            store.close()
+
+    def test_memory_empty_args(self) -> None:
+        executor = TaskExecutor(dry_run=False, timeout_seconds=30, memory_enabled=True)
+        result = executor.execute(_task("memory:   "))
+        self.assertEqual(result.status, TaskStatus.FAILED)
+        self.assertIn("invalid memory command", result.summary)
+
+    def test_prompt_includes_memory_context_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            mem_dir = str(Path(tmpdir) / "mem")
+
+            # Store a memory first
+            from slackclaw.memory import handle_memory_command
+            handle_memory_command(
+                "store", "deployment uses Docker containers",
+                trigger_user="U1", channel_id="C111", thread_ts="1.1",
+                store=store, memory_dir_path=mem_dir,
+            )
+
+            executor = TaskExecutor(
+                dry_run=False, timeout_seconds=30,
+                memory_enabled=True, memory_dir=mem_dir,
+            )
+            with patch("slackclaw.executor.subprocess.run") as mock_run:
+                mock_run.return_value = CompletedProcess(
+                    args=["claude"], returncode=0, stdout="done\n", stderr="",
+                )
+                executor.execute(_task("claude:explain the deployment process"), store=store)
+
+            prompt_arg = mock_run.call_args.args[0][-1]
+            self.assertIn("Relevant memories:", prompt_arg)
+            self.assertIn("Docker", prompt_arg)
+            store.close()
+
+    def test_auto_extract_memories_from_agent_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            mem_dir = str(Path(tmpdir) / "mem")
+            executor = TaskExecutor(
+                dry_run=False, timeout_seconds=30,
+                memory_enabled=True, memory_dir=mem_dir, memory_auto_extract=True,
+            )
+            with patch("slackclaw.executor.subprocess.run") as mock_run:
+                mock_run.return_value = CompletedProcess(
+                    args=["claude"], returncode=0,
+                    stdout="Here is the answer.\n[MEMORY]: Always run tests before deploying\n", stderr="",
+                )
+                result = executor.execute(_task("claude:help me"), store=store)
+
+            self.assertEqual(result.status, TaskStatus.SUCCEEDED)
+            memories = store.list_memories("U1")
+            self.assertTrue(len(memories) >= 1)
+            contents = [m.content for m in memories]
+            self.assertTrue(any("Always run tests" in c for c in contents))
+            store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

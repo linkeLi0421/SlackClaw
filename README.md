@@ -46,6 +46,7 @@ Slack command channel          Your machine             Slack report channel
 │ CLAUDE fix tests│     │ the message, runs it │     │ with status, output │
 │ CODEX refactor  │     │ locally, then posts  │     │ and details         │
 │ KIMI explain    │     │ the result to Slack  │     │                     │
+│ MEMORY store .. │     │                      │     │                     │
 └─────────────────┘     └──────────────────────┘     └─────────────────────┘
 ```
 
@@ -136,6 +137,7 @@ Send messages in your command channel. SlackClaw recognizes four command types:
 | `CODEX` | Sends a prompt to Codex CLI |
 | `KIMI` | Sends a prompt to Kimi CLI |
 | `FILE` | Uploads a local file to Slack |
+| `MEMORY` | Store, recall, or manage persistent memories |
 
 Examples you type in Slack:
 ```
@@ -145,6 +147,8 @@ CLAUDE review this repo and list top 3 issues
 CODEX fix failing tests and summarize changes
 KIMI how can I improve this codebase
 FILE /path/to/report.csv
+MEMORY store project uses Python 3.11
+MEMORY recall deployment process
 ```
 
 You can also use the explicit prefix form:
@@ -183,15 +187,43 @@ CLAUDE, CODEX, and KIMI commands are thread-aware:
 - Replies in the same Slack thread share agent context
 - Different threads run independently (parallel when `WORKER_PROCESSES>1`)
 
+### Persistent Memory
+
+When `MEMORY_ENABLED=true`, AI agents can recall facts, preferences, and procedures across conversations. Memory is stored as human-readable Markdown files and indexed with SQLite FTS5 for fast full-text search.
+
+**Manual commands:**
+```
+MEMORY store project uses Python 3.11        # store a user-scoped note
+MEMORY store workspace:deploy uses Docker    # store a workspace-scoped note
+MEMORY recall deployment process             # search memories by keyword
+MEMORY forget a1b2c3d4e5f6g7h8              # delete a specific memory by ID
+MEMORY list                                  # list your recent memories
+```
+
+**Automatic prompt injection:** When you run CLAUDE/CODEX/KIMI commands, relevant memories are automatically retrieved and injected into the prompt so agents have context from previous sessions.
+
+**Auto-extraction:** When `MEMORY_AUTO_EXTRACT=true`, agents can tag facts in their output with `[MEMORY]: ...` or `[REMEMBER]: ...` and they are automatically saved for future recall.
+
+**Storage layout:**
+```
+~/.config/SlackClaw/memory/
+  user/<user_id>/       # per-user memories
+  workspace/            # shared workspace memories
+  thread/<channel>_<ts>/ # thread-scoped memories
+```
+
+Unaccessed memories are automatically purged after `MEMORY_RETENTION_DAYS` (default 90 days).
+
 ## Dashboard
 
 SlackClaw starts a local web dashboard automatically on every run. The URL is printed at startup (e.g. `http://127.0.0.1:8391`). The dashboard auto-refreshes every 5 seconds and shows:
 
-- **Stats** — total/pending/running/succeeded/failed task counts, queue size, in-flight count
+- **Stats** — total/pending/running/succeeded/failed task counts, queue size, in-flight count, memory count
 - **Configuration** — current runtime settings (tokens are hidden)
 - **Recent Tasks** — task history with status, command, user, timestamps
 - **In-Flight / Queue** — tasks currently executing or waiting
 - **Agent Sessions** — active thread-bound sessions for Claude/Codex/Kimi
+- **Memories** — stored memory counts by scope (when memory is enabled)
 - **Approvals** — pending and resolved approval requests
 - **Execution Locks** — currently held lock keys
 
@@ -247,6 +279,17 @@ Set `DASHBOARD_PORT` to bind to a specific port (default: random available port,
 | `CODEX_SANDBOX_MODE` | `workspace-write` | `workspace-write`, `read-only`, or `danger-full-access` |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Any Claude `--permission-mode` value |
 | `AGENT_RESPONSE_INSTRUCTION` | *(markdown prompt)* | Prompt style hint for agent output; empty to disable |
+
+### Memory
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_ENABLED` | `false` | Enable the persistent memory system |
+| `MEMORY_MAX_PER_SCOPE` | `100` | Max memories per scope key |
+| `MEMORY_RETENTION_DAYS` | `90` | Auto-purge unaccessed memories after this many days |
+| `MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars of memory context injected into prompts |
+| `MEMORY_AUTO_EXTRACT` | `false` | Auto-extract `[MEMORY]:` tags from agent output |
+| `MEMORY_DIR` | *(platform config dir)* | Custom path for memory `.md` files |
 
 ### Report Limits
 
@@ -339,7 +382,7 @@ Improvement ideas inspired by [OpenClaw](https://openclaw.ai/) and the [awesome-
 
 ### Medium Priority
 
-- [ ] **Persistent Agent Memory** — Give AI agents a shared memory store beyond thread context so they can remember user preferences, project facts, and past decisions across threads.
+- [x] **Persistent Agent Memory** — Give AI agents a shared memory store beyond thread context so they can remember user preferences, project facts, and past decisions across threads. Markdown files + SQLite FTS5 for human-readable storage with fast BM25-ranked retrieval.
 - [ ] **Proactive Notifications** — Monitor files, directories, or URLs and post alerts to Slack when changes are detected (file watcher + URL polling).
 - [ ] **Multi-Platform Support** — Abstract listener/reporter into a platform interface so Discord, Telegram, or Microsoft Teams can be added as alternative frontends.
 - [ ] **Browser Automation** — Integrate Playwright via a new command type (`BROWSE <url> <instruction>`) to scrape pages, fill forms, or capture screenshots.

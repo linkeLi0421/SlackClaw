@@ -440,6 +440,10 @@ def _execute_task_in_worker(
     dry_run: bool,
     timeout_seconds: int,
     response_format_instruction: str,
+    memory_enabled: bool = False,
+    memory_dir: str = "",
+    memory_injection_max_chars: int = 2000,
+    memory_auto_extract: bool = False,
 ) -> TaskExecutionResult:
     worker_store = StateStore(state_db_path)
     try:
@@ -447,6 +451,10 @@ def _execute_task_in_worker(
             dry_run=dry_run,
             timeout_seconds=timeout_seconds,
             response_format_instruction=response_format_instruction,
+            memory_enabled=memory_enabled,
+            memory_dir=memory_dir,
+            memory_injection_max_chars=memory_injection_max_chars,
+            memory_auto_extract=memory_auto_extract,
         )
         return executor.execute(task, store=worker_store)
     finally:
@@ -586,6 +594,10 @@ def _drain_queue(
                 config.dry_run,
                 config.exec_timeout_seconds,
                 config.agent_response_instruction,
+                config.memory_enabled,
+                config.memory_dir,
+                config.memory_injection_max_chars,
+                config.memory_auto_extract,
             )
         except Exception as exc:
             _event(
@@ -663,6 +675,10 @@ def run(argv: list[str] | None = None) -> int:
         dry_run=config.dry_run,
         timeout_seconds=config.exec_timeout_seconds,
         response_format_instruction=config.agent_response_instruction,
+        memory_enabled=config.memory_enabled,
+        memory_dir=config.memory_dir,
+        memory_injection_max_chars=config.memory_injection_max_chars,
+        memory_auto_extract=config.memory_auto_extract,
     )
     process_pool: cf.ProcessPoolExecutor | None = None
     if config.worker_processes > 1:
@@ -789,6 +805,8 @@ def run(argv: list[str] | None = None) -> int:
 
     checkpoint_key = _checkpoint_key(config.command_channel_id)
     last_ts = store.get_checkpoint(checkpoint_key) if config.listener_mode == "poll" else None
+    _memory_purge_interval = 3600  # purge check every hour
+    _last_memory_purge = time.time()
 
     try:
         while not should_exit:
@@ -862,6 +880,21 @@ def run(argv: list[str] | None = None) -> int:
                 elapsed_ms=elapsed_ms,
                 last_ts=last_ts,
             )
+
+            # Periodic memory purge
+            if config.memory_enabled and (time.time() - _last_memory_purge) >= _memory_purge_interval:
+                try:
+                    purged_paths = store.purge_old_memories(config.memory_retention_days)
+                    for p in purged_paths:
+                        try:
+                            Path(p).unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    if purged_paths:
+                        _event("memory_purge", purged=len(purged_paths))
+                except Exception as exc:
+                    _event("memory_purge_error", error=str(exc))
+                _last_memory_purge = time.time()
 
             if args.once:
                 _finalize_in_flight(in_flight=in_flight, store=store, reporter=reporter, wait=True)

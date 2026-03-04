@@ -8,7 +8,7 @@ from pathlib import Path
 
 from slackclaw.config import AppConfig
 from slackclaw.dashboard import DashboardContext, start_dashboard
-from slackclaw.models import TaskStatus
+from slackclaw.models import MemoryCategory, MemoryRecord, MemoryScope, TaskStatus
 from slackclaw.queue import TaskQueue
 from slackclaw.state_store import StateStore
 
@@ -204,6 +204,86 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("openTaskModal", body)
                 self.assertIn("localTime", body)
                 self.assertIn("fadeSlideIn", body)
+
+                conn.close()
+            finally:
+                server.shutdown()
+
+
+    def test_api_memories_returns_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = StateStore(db_path)
+            store.init_schema()
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-1", scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.FACT, content="test fact", file_path="/tmp/m.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            store.close()
+
+            queue = TaskQueue()
+            config = _test_config(db_path)
+            ctx = DashboardContext(
+                config=config,
+                state_db_path=db_path,
+                queue_snapshot=queue.snapshot,
+                in_flight_snapshot=lambda: [],
+                queue_len=queue.__len__,
+            )
+
+            thread, server = start_dashboard(ctx)
+            try:
+                port = server.server_port
+                conn = HTTPConnection("127.0.0.1", port, timeout=5)
+
+                conn.request("GET", "/api/memories")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read())
+                self.assertEqual(data["total_memories"], 1)
+                self.assertIn("U1", data["memories_by_scope"])
+
+                conn.close()
+            finally:
+                server.shutdown()
+
+    def test_api_stats_includes_memory_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = StateStore(db_path)
+            store.init_schema()
+            store.upsert_memory(MemoryRecord(
+                memory_id="mem-1", scope=MemoryScope.USER, scope_key="U1",
+                category=MemoryCategory.FACT, content="test", file_path="/tmp/m.md",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                last_accessed_at="2026-01-01T00:00:00+00:00",
+            ))
+            store.close()
+
+            queue = TaskQueue()
+            config = _test_config(db_path)
+            ctx = DashboardContext(
+                config=config,
+                state_db_path=db_path,
+                queue_snapshot=queue.snapshot,
+                in_flight_snapshot=lambda: [],
+                queue_len=queue.__len__,
+            )
+
+            thread, server = start_dashboard(ctx)
+            try:
+                port = server.server_port
+                conn = HTTPConnection("127.0.0.1", port, timeout=5)
+
+                conn.request("GET", "/api/stats")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 200)
+                stats = json.loads(resp.read())
+                self.assertEqual(stats["memory_count"], 1)
 
                 conn.close()
             finally:

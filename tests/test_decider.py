@@ -160,6 +160,22 @@ class DeciderTests(unittest.TestCase):
         assert decision.task is not None
         self.assertEqual(decision.task.command_text, "file:/tmp/report.csv")
 
+    def test_simple_memory_command_without_prefix(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="MEMORY store project uses Python", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "memory:store project uses Python")
+
+    def test_memory_recall_command(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="MEMORY recall Python version", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "memory:recall Python version")
+
     def test_thread_lock_uses_thread_root_ts_for_agents(self) -> None:
         cfg = _config(trigger_mode="prefix")
         msg = SlackMessage(

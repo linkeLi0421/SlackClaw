@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from uuid import uuid4
 
+from .memory import build_memory_context, extract_and_store_memories, handle_memory_command
 from .models import TaskExecutionResult, TaskSpec, TaskStatus
 from .state_store import StateStore
 
@@ -38,10 +39,18 @@ class TaskExecutor:
         dry_run: bool,
         timeout_seconds: int,
         response_format_instruction: str = _DEFAULT_AGENT_RESPONSE_INSTRUCTION,
+        memory_enabled: bool = False,
+        memory_dir: str = "",
+        memory_injection_max_chars: int = 2000,
+        memory_auto_extract: bool = False,
     ) -> None:
         self._dry_run = dry_run
         self._timeout_seconds = timeout_seconds
         self._response_format_instruction = response_format_instruction.strip()
+        self._memory_enabled = memory_enabled
+        self._memory_dir = memory_dir
+        self._memory_injection_max_chars = memory_injection_max_chars
+        self._memory_auto_extract = memory_auto_extract
         self._agent_workdir = (os.environ.get("AGENT_WORKDIR") or "").strip()
         self._kimi_permission_mode = (os.environ.get("KIMI_PERMISSION_MODE") or "yolo").strip().lower()
         self._codex_permission_mode = (os.environ.get("CODEX_PERMISSION_MODE") or "full-auto").strip().lower()
@@ -90,6 +99,41 @@ class TaskExecutor:
                     details="use format: kimi:<prompt> or Slack message `KIMI <prompt>`",
                 )
             return self._run_kimi(prompt, task=task, store=store)
+
+        if command.startswith("memory:"):
+            mem_args = command[7:].strip()
+            if not mem_args:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary="invalid memory command: empty args",
+                    details="use format: MEMORY store|recall|forget|list <args>",
+                )
+            # Split subcommand from rest
+            parts = mem_args.split(None, 1)
+            subcommand = parts[0]
+            rest = parts[1] if len(parts) > 1 else ""
+            if not self._memory_enabled:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary="memory system is disabled",
+                    details="set MEMORY_ENABLED=true to enable the memory system",
+                )
+            if store is None:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary="memory command requires state store",
+                    details="no state store available",
+                )
+            summary, details = handle_memory_command(
+                subcommand, rest,
+                trigger_user=task.trigger_user,
+                channel_id=task.channel_id,
+                thread_ts=task.thread_ts,
+                store=store,
+                memory_dir_path=self._memory_dir,
+            )
+            status = TaskStatus.SUCCEEDED if "failed" not in summary else TaskStatus.FAILED
+            return TaskExecutionResult(status=status, summary=summary, details=details)
 
         if command.startswith("file:"):
             filepath = command[5:].strip()
@@ -219,6 +263,7 @@ class TaskExecutor:
         if completed.returncode == 0:
             self._persist_session(store, task, agent="kimi", session_id=session_id)
             self._append_thread_context(store, task=task, prompt=prompt, response=stdout or details, agent="kimi")
+            self._auto_extract_memories(store, details or stdout or "", agent="kimi", task=task)
             return TaskExecutionResult(
                 status=TaskStatus.SUCCEEDED,
                 summary="kimi command completed",
@@ -297,6 +342,7 @@ class TaskExecutor:
             if session_id:
                 self._persist_session(store, task, agent="codex", session_id=session_id)
             self._append_thread_context(store, task=task, prompt=prompt, response=response, agent="codex")
+            self._auto_extract_memories(store, response or "", agent="codex", task=task)
             return TaskExecutionResult(
                 status=TaskStatus.SUCCEEDED,
                 summary="codex command completed",
@@ -353,6 +399,7 @@ class TaskExecutor:
         details = "\n".join(part for part in [stdout, stderr] if part)
         if completed.returncode == 0:
             self._append_thread_context(store, task=task, prompt=prompt, response=stdout or details, agent="claude")
+            self._auto_extract_memories(store, details or stdout or "", agent="claude", task=task)
             return TaskExecutionResult(
                 status=TaskStatus.SUCCEEDED,
                 summary="claude command completed",
@@ -442,6 +489,18 @@ class TaskExecutor:
         store.upsert_agent_session(task.channel_id, task.thread_ts, agent, session_id)
 
     def _prompt_with_context(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> str:
+        # Build memory context if enabled
+        memory_section = ""
+        if self._memory_enabled and store is not None:
+            memory_section = build_memory_context(
+                store,
+                trigger_user=task.trigger_user,
+                channel_id=task.channel_id,
+                thread_ts=task.thread_ts,
+                prompt_text=prompt,
+                max_chars=self._memory_injection_max_chars,
+            )
+
         if store is None:
             base_prompt = prompt
         else:
@@ -454,6 +513,10 @@ class TaskExecutor:
                     f"{context}\n\n"
                     f"Current request:\n{prompt}"
                 )
+
+        # Prepend memory context before everything else
+        if memory_section:
+            base_prompt = f"{memory_section}\n\n{base_prompt}"
 
         if task.attachment_paths:
             attachment_list = "\n".join(f"- {path}" for path in task.attachment_paths)
@@ -492,6 +555,26 @@ class TaskExecutor:
                 flags.extend(["--sandbox", self._codex_sandbox_mode])
             flags.extend(["-C", codex_cwd])
         return flags
+
+    def _auto_extract_memories(
+        self,
+        store: StateStore | None,
+        result_text: str,
+        *,
+        agent: str,
+        task: TaskSpec,
+    ) -> None:
+        if not self._memory_auto_extract or store is None or not result_text:
+            return
+        try:
+            extract_and_store_memories(
+                store, result_text, agent,
+                trigger_user=task.trigger_user,
+                task_id=task.task_id,
+                memory_dir_path=self._memory_dir,
+            )
+        except Exception:
+            pass  # best-effort, don't fail the task
 
     @staticmethod
     def _append_thread_context(

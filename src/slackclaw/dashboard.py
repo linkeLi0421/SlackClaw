@@ -54,6 +54,7 @@ def _make_handler(ctx: DashboardContext) -> type:
                 "/api/locks": self._handle_api_locks,
                 "/api/stats": self._handle_api_stats,
                 "/api/config": self._handle_api_config,
+                "/api/memories": self._handle_api_memories,
             }
             route = routes.get(path)
             if route:
@@ -127,11 +128,24 @@ def _make_handler(ctx: DashboardContext) -> type:
                 store.close()
             _json_response(self, locks)
 
+        def _handle_api_memories(self) -> None:
+            store = self._open_store()
+            try:
+                scope_counts = store.count_memories_by_scope()
+                total = store.count_memories_total()
+            finally:
+                store.close()
+            _json_response(self, {
+                "total_memories": total,
+                "memories_by_scope": scope_counts,
+            })
+
         def _handle_api_stats(self) -> None:
             store = self._open_store()
             try:
                 status_counts = store.count_tasks_by_status()
                 checkpoints = store.list_checkpoints()
+                memory_count = store.count_memories_total()
             finally:
                 store.close()
             total = sum(status_counts.values())
@@ -143,6 +157,7 @@ def _make_handler(ctx: DashboardContext) -> type:
                 "in_flight": ctx.in_flight_snapshot(),
                 "queue": ctx.queue_snapshot(),
                 "checkpoints": checkpoints,
+                "memory_count": memory_count,
             })
 
         def _handle_api_config(self) -> None:
@@ -165,6 +180,11 @@ def _make_handler(ctx: DashboardContext) -> type:
                 "state_db_path": cfg.state_db_path,
                 "dashboard_port": cfg.dashboard_port,
                 "shell_allowlist": list(cfg.shell_allowlist),
+                "memory_enabled": cfg.memory_enabled,
+                "memory_max_per_scope": cfg.memory_max_per_scope,
+                "memory_retention_days": cfg.memory_retention_days,
+                "memory_injection_max_chars": cfg.memory_injection_max_chars,
+                "memory_auto_extract": cfg.memory_auto_extract,
             }
             _json_response(self, safe)
 
@@ -447,6 +467,11 @@ def _dashboard_html() -> str:
     </div>
 
     <div class="card">
+      <h2>Memories</h2>
+      <div id="memories-info"></div>
+    </div>
+
+    <div class="card">
       <h2>Approvals</h2>
       <div class="table-wrap" id="approvals-table"></div>
     </div>
@@ -581,9 +606,11 @@ def _dashboard_html() -> str:
         fetchJson('/api/sessions'),
         fetchJson('/api/approvals'),
         fetchJson('/api/locks'),
+        fetchJson('/api/memories'),
       ]);
       var stats = results[0], config = results[1], tasks = results[2];
       var sessions = results[3], approvals = results[4], locks = results[5];
+      var memories = results[6];
 
       document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
 
@@ -661,6 +688,19 @@ def _dashboard_html() -> str:
           return '<tr><td>'+esc(l.lock_key)+'</td><td>'+esc(l.task_id)+'</td><td>'+localTime(l.acquired_at)+'</td></tr>';
         });
         lt.innerHTML = makeTable(['Lock Key','Task ID','Acquired At'], lRows);
+      }
+
+      if (memories) {
+        var mi = document.getElementById('memories-info');
+        var mHtml = '<div class="config-grid">';
+        mHtml += '<div class="config-item"><span class="key">Total:</span> <span class="val">' + (memories.total_memories || 0) + '</span></div>';
+        var scopes = memories.memories_by_scope || {};
+        Object.keys(scopes).forEach(function(k) {
+          mHtml += '<div class="config-item"><span class="key">' + esc(k) + ':</span> <span class="val">' + scopes[k] + '</span></div>';
+        });
+        mHtml += '</div>';
+        if (memories.total_memories === 0) mHtml = '<p class="empty">No memories stored</p>';
+        mi.innerHTML = mHtml;
       }
     }
 

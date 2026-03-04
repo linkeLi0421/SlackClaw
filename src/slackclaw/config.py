@@ -93,6 +93,12 @@ class AppConfig:
     worker_processes: int = 1
     shell_allowlist: tuple[str, ...] = DEFAULT_SHELL_ALLOWLIST
     dashboard_port: int = 0
+    memory_enabled: bool = False
+    memory_max_per_scope: int = 100
+    memory_retention_days: int = 90
+    memory_injection_max_chars: int = 2000
+    memory_auto_extract: bool = False
+    memory_dir: str = ""
 
 
 def _required(env: Mapping[str, str], key: str) -> str:
@@ -267,6 +273,25 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
     else:
         dashboard_port = 0
 
+    memory_enabled = _parse_bool("MEMORY_ENABLED", source.get("MEMORY_ENABLED", ""), False)
+    memory_max_per_scope = _parse_positive_int(
+        "MEMORY_MAX_PER_SCOPE",
+        source.get("MEMORY_MAX_PER_SCOPE", ""),
+        100,
+    )
+    memory_retention_days = _parse_positive_int(
+        "MEMORY_RETENTION_DAYS",
+        source.get("MEMORY_RETENTION_DAYS", ""),
+        90,
+    )
+    memory_injection_max_chars = _parse_positive_int(
+        "MEMORY_INJECTION_MAX_CHARS",
+        source.get("MEMORY_INJECTION_MAX_CHARS", ""),
+        2000,
+    )
+    memory_auto_extract = _parse_bool("MEMORY_AUTO_EXTRACT", source.get("MEMORY_AUTO_EXTRACT", ""), False)
+    memory_dir = (source.get("MEMORY_DIR") or "").strip()
+
     return AppConfig(
         slack_bot_token=slack_bot_token,
         slack_app_token=slack_app_token,
@@ -294,4 +319,10 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         worker_processes=worker_processes,
         shell_allowlist=shell_allowlist,
         dashboard_port=dashboard_port,
+        memory_enabled=memory_enabled,
+        memory_max_per_scope=memory_max_per_scope,
+        memory_retention_days=memory_retention_days,
+        memory_injection_max_chars=memory_injection_max_chars,
+        memory_auto_extract=memory_auto_extract,
+        memory_dir=memory_dir,
     )
