@@ -53,4 +53,3 @@ Copy-Item $binPath $releasePath -Force
 Write-Host "Build complete."
 Write-Host "Binary: $binPath"
 Write-Host "Release file: $releasePath"
-Write-Host "Run first-time setup with: .\release\$releaseName --setup"

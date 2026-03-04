@@ -461,12 +461,14 @@ def _finish_task(
     reporter: Reporter,
 ) -> None:
     store.update_task_status(task.task_id, result.status)
+    report_text = ""
     try:
-        reporter.report(task, result)
+        report_text = reporter.report(task, result)
         report_ok = True
     except Exception as exc:
         report_ok = False
         _event("report_failed", task_id=task.task_id, error=str(exc))
+    store.store_task_result(task.task_id, result.summary, result.details, report_text=report_text)
 
     _event(
         "task_finished",

@@ -203,5 +203,33 @@ class StateStoreTests(unittest.TestCase):
             store.close()
 
 
+    def test_store_task_result_merges_into_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+
+            store.upsert_task("t1", TaskStatus.SUCCEEDED, payload={"command_text": "sh:ls"})
+            store.store_task_result("t1", "listed files", "file1.txt\nfile2.txt")
+
+            row = store.get_task("t1")
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.payload["result_summary"], "listed files")
+            self.assertEqual(row.payload["result_details"], "file1.txt\nfile2.txt")
+            # original payload key preserved
+            self.assertEqual(row.payload["command_text"], "sh:ls")
+            store.close()
+
+    def test_store_task_result_nonexistent_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+
+            # Should not raise for a nonexistent task
+            store.store_task_result("no-such-task", "summary", "details")
+            self.assertIsNone(store.get_task("no-such-task"))
+            store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

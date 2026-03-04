@@ -53,4 +53,3 @@ fi
 echo "Build complete."
 echo "Binary: dist/${BIN_NAME}"
 echo "Release file: release/${RELEASE_NAME}"
-echo "Run first-time setup with: ./release/${RELEASE_NAME} --setup"

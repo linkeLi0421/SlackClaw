@@ -128,6 +128,87 @@ class DashboardTests(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_api_tasks_includes_result_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = StateStore(db_path)
+            store.init_schema()
+            store.upsert_task(
+                "task-r1",
+                TaskStatus.SUCCEEDED,
+                payload={
+                    "command_text": "sh:echo hi",
+                    "trigger_user": "U1",
+                    "trigger_text": "!do echo hi",
+                },
+            )
+            store.store_task_result("task-r1", "echoed hi", "hi\n")
+            store.close()
+
+            queue = TaskQueue()
+            config = _test_config(db_path)
+            ctx = DashboardContext(
+                config=config,
+                state_db_path=db_path,
+                queue_snapshot=queue.snapshot,
+                in_flight_snapshot=lambda: [],
+                queue_len=queue.__len__,
+            )
+
+            thread, server = start_dashboard(ctx)
+            try:
+                port = server.server_port
+                conn = HTTPConnection("127.0.0.1", port, timeout=5)
+
+                conn.request("GET", "/api/tasks")
+                resp = conn.getresponse()
+                self.assertEqual(resp.status, 200)
+                tasks = json.loads(resp.read())
+                self.assertEqual(len(tasks), 1)
+                t = tasks[0]
+                self.assertEqual(t["result_summary"], "echoed hi")
+                self.assertEqual(t["result_details"], "hi\n")
+                self.assertEqual(t["trigger_text"], "!do echo hi")
+
+                conn.close()
+            finally:
+                server.shutdown()
+
+    def test_dashboard_html_contains_modal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "state.db")
+            store = StateStore(db_path)
+            store.init_schema()
+            store.close()
+
+            queue = TaskQueue()
+            config = _test_config(db_path)
+            ctx = DashboardContext(
+                config=config,
+                state_db_path=db_path,
+                queue_snapshot=queue.snapshot,
+                in_flight_snapshot=lambda: [],
+                queue_len=queue.__len__,
+            )
+
+            thread, server = start_dashboard(ctx)
+            try:
+                port = server.server_port
+                conn = HTTPConnection("127.0.0.1", port, timeout=5)
+
+                conn.request("GET", "/")
+                resp = conn.getresponse()
+                body = resp.read().decode()
+                self.assertIn("task-modal", body)
+                self.assertIn("modal-overlay", body)
+                self.assertIn("openTaskModal", body)
+                self.assertIn("localTime", body)
+                self.assertIn("linear-gradient", body)
+
+                conn.close()
+            finally:
+                server.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

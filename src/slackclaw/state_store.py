@@ -456,6 +456,24 @@ class StateStore:
             )
         return result
 
+    def store_task_result(self, task_id: str, summary: str, details: str, report_text: str = "") -> None:
+        row = self._conn.execute(
+            "SELECT payload FROM tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        if row is None:
+            return
+        payload = json.loads(row["payload"]) if row["payload"] else {}
+        payload["result_summary"] = summary
+        payload["result_details"] = details
+        if report_text:
+            payload["report_text"] = report_text
+        encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        self._conn.execute(
+            "UPDATE tasks SET payload = ?, updated_at = ? WHERE task_id = ?",
+            (encoded, _utc_now(), task_id),
+        )
+        self._conn.commit()
+
     def count_tasks_by_status(self) -> dict[str, int]:
         rows = self._conn.execute(
             "SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status"

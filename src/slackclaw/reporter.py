@@ -65,8 +65,9 @@ class Reporter:
         self._details_max_chars = details_max_chars
         self._file_output_threshold = file_output_threshold
 
-    def report(self, task: TaskSpec, result: TaskExecutionResult) -> None:
+    def report(self, task: TaskSpec, result: TaskExecutionResult) -> str:
         auto_file_path: str | None = None
+        report_text = ""
         try:
             # Auto-file: when details exceed threshold, write to temp file for upload
             use_auto_file = (
@@ -95,6 +96,13 @@ class Reporter:
             else:
                 trimmed_details = _trim(result.details, self._details_max_chars)
 
+            report_text = "\n".join(
+                [
+                    f"{status_icon} status: {status_label}",
+                    f"summary: {trimmed_summary}",
+                    f"details: {trimmed_details}",
+                ]
+            )
             fallback_text = "\n".join(
                 [
                     f"{status_icon} SlackClaw task {task.task_id}",
@@ -196,3 +204,4 @@ class Reporter:
                     os.unlink(auto_file_path)
                 except OSError:
                     pass
+        return report_text
