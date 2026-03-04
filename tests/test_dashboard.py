@@ -203,7 +203,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("modal-overlay", body)
                 self.assertIn("openTaskModal", body)
                 self.assertIn("localTime", body)
-                self.assertIn("linear-gradient", body)
+                self.assertIn("fadeSlideIn", body)
 
                 conn.close()
             finally:

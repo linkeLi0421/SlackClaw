@@ -195,134 +195,228 @@ def _dashboard_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SlackClaw Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --bg-primary: #f5f0eb;
+      --bg-card: #ffffff;
+      --bg-card-hover: #faf8f5;
+      --bg-input: #f0ece6;
+      --border: #ddd6cb;
+      --border-accent: #c05d3b;
+      --text-primary: #2a2520;
+      --text-secondary: #6b6360;
+      --text-muted: #a09890;
+      --accent: #c05d3b;
+      --accent-dim: rgba(192,93,59,0.07);
+      --success: #2d8659;
+      --danger: #c93d3d;
+      --warning: #b47a1e;
+      --info: #2e7d9c;
+      --font-display: 'Outfit', sans-serif;
+      --font-mono: 'DM Mono', ui-monospace, monospace;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-      background: #f0f2f5; color: #1a1a1a; padding: 0;
+      font-family: var(--font-mono);
+      background: var(--bg-primary); color: var(--text-primary);
+      min-height: 100vh;
     }
+
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulseAccent {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
     .header {
-      background: linear-gradient(135deg, #667eea, #764ba2);
-      color: #fff; padding: 24px 32px; margin-bottom: 24px;
+      background: var(--bg-card);
+      border-bottom: 2px solid var(--accent);
+      padding: 24px 32px 18px;
+      display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap;
+      box-shadow: 0 1px 3px rgba(42,37,32,0.06);
     }
-    .header h1 { font-size: 24px; font-weight: 700; }
-    .header .subtitle { color: rgba(255,255,255,0.85); font-size: 14px; margin-top: 4px; }
-    .header .refresh-info { color: rgba(255,255,255,0.7); font-size: 12px; margin-top: 8px; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 0 20px 40px; }
+    .header h1 {
+      font-family: var(--font-display);
+      font-size: 24px; font-weight: 700; letter-spacing: -0.5px;
+      color: var(--accent);
+    }
+    .header .subtitle {
+      font-size: 12px; color: var(--text-secondary); letter-spacing: 0.2px;
+    }
+    .header .refresh-info {
+      font-size: 11px; color: var(--text-muted); margin-left: auto;
+    }
+    .container { max-width: 1280px; margin: 0 auto; padding: 24px 24px 48px; }
+
     .stats-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 12px; margin-bottom: 24px;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 10px; margin-bottom: 28px;
+      animation: fadeSlideIn 0.4s ease-out;
     }
     .stat-card {
-      background: #fff; border-radius: 10px; padding: 16px; text-align: center;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-left: 4px solid #667eea;
-      transition: transform 0.15s, box-shadow 0.15s;
+      background: var(--bg-card); border: 1px solid var(--border);
+      padding: 16px 14px; text-align: center;
+      border-radius: 6px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      position: relative; overflow: hidden;
     }
-    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
-    .stat-card .value { font-size: 28px; font-weight: 700; }
-    .stat-card .label { font-size: 12px; color: #666; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .sc-total { border-left-color: #667eea; }
-    .sc-pending { border-left-color: #f0ad4e; }
-    .sc-running { border-left-color: #5bc0de; }
-    .sc-succeeded { border-left-color: #5cb85c; }
-    .sc-failed { border-left-color: #d9534f; }
-    .sc-approval { border-left-color: #f0ad4e; }
-    .sc-queue { border-left-color: #9b59b6; }
-    .sc-inflight { border-left-color: #17a2b8; }
+    .stat-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0;
+      height: 3px; background: var(--border); border-radius: 6px 6px 0 0;
+    }
+    .stat-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(192,93,59,0.1); }
+    .stat-card .value {
+      font-family: var(--font-display);
+      font-size: 30px; font-weight: 700; letter-spacing: -1px;
+    }
+    .stat-card .label {
+      font-size: 10px; color: var(--text-muted); margin-top: 6px;
+      text-transform: uppercase; letter-spacing: 1.5px;
+    }
+    .sc-total .value { color: var(--text-primary); }
+    .sc-total::before { background: var(--accent); }
+    .sc-pending .value { color: var(--warning); }
+    .sc-pending::before { background: var(--warning); }
+    .sc-running .value { color: var(--info); }
+    .sc-running::before { background: var(--info); animation: pulseAccent 2s ease-in-out infinite; }
+    .sc-succeeded .value { color: var(--success); }
+    .sc-succeeded::before { background: var(--success); }
+    .sc-failed .value { color: var(--danger); }
+    .sc-failed::before { background: var(--danger); }
+    .sc-approval .value { color: var(--warning); }
+    .sc-approval::before { background: var(--warning); }
+    .sc-queue .value { color: var(--text-secondary); }
+    .sc-queue::before { background: var(--text-secondary); }
+    .sc-inflight .value { color: var(--info); }
+    .sc-inflight::before { background: var(--info); }
+
     .card {
-      background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 20px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px; margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(42,37,32,0.04);
+      animation: fadeSlideIn 0.5s ease-out both;
     }
-    .card h2 { font-size: 16px; margin-bottom: 12px; color: #333; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .card:nth-child(2) { animation-delay: 0.05s; }
+    .card:nth-child(3) { animation-delay: 0.1s; }
+    .card:nth-child(4) { animation-delay: 0.15s; }
+    .card h2 {
+      font-family: var(--font-display);
+      font-size: 14px; font-weight: 600; color: var(--accent);
+      text-transform: uppercase; letter-spacing: 1.2px;
+      margin-bottom: 14px; padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th {
-      text-align: left; padding: 10px 8px; border-bottom: 2px solid #e0e0e0;
-      font-weight: 700; color: #555; white-space: nowrap;
-      text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px;
+      text-align: left; padding: 8px 10px;
+      font-weight: 500; color: var(--text-muted); white-space: nowrap;
+      text-transform: uppercase; font-size: 10px; letter-spacing: 1px;
+      border-bottom: 2px solid var(--border);
     }
-    td { padding: 9px 8px; border-bottom: 1px solid #f0f0f0; word-break: break-all; }
-    tr:hover td { background: #f5f0ff; }
+    td {
+      padding: 8px 10px; border-bottom: 1px solid rgba(221,214,203,0.6);
+      word-break: break-all; color: var(--text-secondary);
+    }
+    tr:hover td { background: var(--accent-dim); color: var(--text-primary); }
     tr.task-row { cursor: pointer; }
+
     .badge {
-      display: inline-block; padding: 3px 10px; border-radius: 12px;
-      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+      display: inline-block; padding: 2px 8px;
+      font-size: 10px; font-weight: 500; text-transform: uppercase;
+      letter-spacing: 0.5px; border-radius: 3px;
     }
-    .badge-pending { background: #fff3cd; color: #856404; }
-    .badge-running { background: #d1ecf1; color: #0c5460; }
-    .badge-succeeded { background: #d4edda; color: #155724; }
-    .badge-failed { background: #f8d7da; color: #721c24; }
-    .badge-canceled { background: #e2e3e5; color: #383d41; }
-    .badge-waiting_approval { background: #fff3cd; color: #856404; }
-    .badge-aborted_on_restart { background: #f8d7da; color: #721c24; }
-    .badge-approved { background: #d4edda; color: #155724; }
-    .badge-rejected { background: #f8d7da; color: #721c24; }
+    .badge-pending { background: rgba(180,122,30,0.12); color: var(--warning); }
+    .badge-running { background: rgba(46,125,156,0.12); color: var(--info); }
+    .badge-succeeded { background: rgba(45,134,89,0.12); color: var(--success); }
+    .badge-failed { background: rgba(201,61,61,0.12); color: var(--danger); }
+    .badge-canceled { background: rgba(160,152,144,0.12); color: var(--text-muted); }
+    .badge-waiting_approval { background: rgba(180,122,30,0.12); color: var(--warning); }
+    .badge-aborted_on_restart { background: rgba(201,61,61,0.12); color: var(--danger); }
+    .badge-approved { background: rgba(45,134,89,0.12); color: var(--success); }
+    .badge-rejected { background: rgba(201,61,61,0.12); color: var(--danger); }
+
     .config-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 8px;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 6px;
     }
-    .config-item { font-size: 13px; }
-    .config-item .key { font-weight: 600; color: #555; }
-    .config-item .val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #333; }
-    .empty { color: #999; font-style: italic; padding: 12px; }
+    .config-item { font-size: 12px; padding: 3px 0; }
+    .config-item .key { color: var(--text-muted); }
+    .config-item .val { color: var(--accent); font-weight: 500; }
+    .empty { color: var(--text-muted); font-style: italic; padding: 12px; }
     .table-wrap { overflow-x: auto; }
 
-    /* Modal overlay */
+    /* Modal */
     .modal-overlay {
       display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;
+      background: rgba(42,37,32,0.4); z-index: 1000;
+      justify-content: center; align-items: center;
+      backdrop-filter: blur(4px);
     }
     .modal-overlay.active { display: flex; }
     .modal {
-      background: #fff; border-radius: 12px; width: 90%; max-width: 700px;
-      max-height: 80vh; display: flex; flex-direction: column;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 90%; max-width: 720px; max-height: 80vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 8px 32px rgba(42,37,32,0.15);
+      animation: fadeSlideIn 0.25s ease-out;
     }
     .modal-header {
       display: flex; justify-content: space-between; align-items: center;
-      padding: 16px 20px; border-bottom: 1px solid #e0e0e0;
-      background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
-      border-radius: 12px 12px 0 0;
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
     }
-    .modal-header h3 { font-size: 16px; }
+    .modal-header h3 {
+      font-family: var(--font-display);
+      font-size: 15px; font-weight: 600; color: var(--accent);
+      text-transform: uppercase; letter-spacing: 1px;
+    }
     .modal-close {
-      background: none; border: none; color: #fff; font-size: 22px;
-      cursor: pointer; padding: 0 4px; line-height: 1;
+      background: none; border: 1px solid var(--border); color: var(--text-muted);
+      font-size: 16px; cursor: pointer; padding: 4px 10px; line-height: 1;
+      border-radius: 4px;
+      transition: border-color 0.2s, color 0.2s, background 0.2s;
     }
+    .modal-close:hover { border-color: var(--danger); color: var(--danger); background: rgba(201,61,61,0.06); }
     .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
-    .chat-row {
-      display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px;
-    }
+
+    .chat-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
     .chat-row.row-user { flex-direction: row; }
     .chat-row.row-system { flex-direction: row-reverse; }
     .chat-avatar {
-      width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+      border: 2px solid var(--border);
     }
     .chat-bubble {
-      max-width: 80%; padding: 12px 16px; border-radius: 12px;
-      font-size: 13px; line-height: 1.5;
+      max-width: 80%; padding: 10px 14px;
+      font-size: 12px; line-height: 1.6;
+      border-radius: 10px;
     }
-    .chat-user {
-      background: #e8eaf6; color: #1a1a1a;
-      border-bottom-left-radius: 4px;
+    .chat-user { background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border); }
+    .chat-system { background: rgba(192,93,59,0.06); color: var(--text-secondary); border: 1px solid rgba(192,93,59,0.15); }
+    .chat-label {
+      font-size: 10px; font-weight: 500; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 4px; letter-spacing: 0.5px;
     }
-    .chat-system {
-      background: #ede7f6; color: #1a1a1a;
-      border-bottom-right-radius: 4px;
-    }
-    .chat-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #666; margin-bottom: 4px; }
     .chat-bubble pre {
-      background: #f5f5f5; padding: 10px; border-radius: 6px; overflow-x: auto;
-      font-size: 12px; margin-top: 8px; white-space: pre-wrap; word-break: break-all;
+      background: var(--bg-input); padding: 8px 10px;
+      overflow-x: auto; font-size: 11px; margin-top: 6px;
+      white-space: pre-wrap; word-break: break-all;
+      border: 1px solid var(--border); border-radius: 4px; color: var(--text-secondary);
     }
-    .chat-placeholder { color: #999; font-style: italic; }
+    .chat-placeholder { color: var(--text-muted); font-style: italic; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>SlackClaw Dashboard</h1>
-    <p class="subtitle">Live status &mdash; auto-refreshes every 5 seconds</p>
-    <p class="refresh-info">Last updated: <span id="last-updated">-</span></p>
+    <h1>SlackClaw</h1>
+    <p class="subtitle">live dashboard &mdash; 5s refresh</p>
+    <p class="refresh-info"><span id="last-updated">-</span></p>
   </div>
   <div class="container">
     <div class="stats-grid" id="stats-grid"></div>
@@ -376,8 +470,8 @@ def _dashboard_html() -> str:
 
   <script>
     var _taskCache = [];
-    var AVATAR_USER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiM1YzZiYzAiLz48Y2lyY2xlIGN4PSIyMCIgY3k9IjE0IiByPSI2LjUiIGZpbGw9IiNmZmYiLz48cGF0aCBkPSJNOCAzNWMwLTggNS40LTEzIDEyLTEzczEyIDUgMTIgMTMiIGZpbGw9IiNmZmYiLz48L3N2Zz4K';
-    var AVATAR_BOT = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiM3ZTU3YzIiLz48cmVjdCB4PSIxMCIgeT0iMTMiIHdpZHRoPSIyMCIgaGVpZ2h0PSIxNiIgcng9IjQiIGZpbGw9IiNmZmYiLz48Y2lyY2xlIGN4PSIxNSIgY3k9IjIwIiByPSIyLjUiIGZpbGw9IiM3ZTU3YzIiLz48Y2lyY2xlIGN4PSIyNSIgY3k9IjIwIiByPSIyLjUiIGZpbGw9IiM3ZTU3YzIiLz48cmVjdCB4PSIxNCIgeT0iMjUiIHdpZHRoPSIxMiIgaGVpZ2h0PSIyIiByeD0iMSIgZmlsbD0iIzdlNTdjMiIvPjxsaW5lIHgxPSIyMCIgeTE9IjciIHgyPSIyMCIgeTI9IjEzIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMiIvPjxjaXJjbGUgY3g9IjIwIiBjeT0iNiIgcj0iMiIgZmlsbD0iI2ZmZiIvPjwvc3ZnPgo=';
+    var AVATAR_USER = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCI+PHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiByeD0iMjAiIGZpbGw9IiNmMGVjZTYiLz48Y2lyY2xlIGN4PSIyMCIgY3k9IjE0IiByPSI2IiBmaWxsPSIjYzA1ZDNiIi8+PHBhdGggZD0iTTggMzRjMC03LjUgNS40LTEyIDEyLTEyczEyIDQuNSAxMiAxMiIgZmlsbD0iI2MwNWQzYiIvPjwvc3ZnPg==';
+    var AVATAR_BOT = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCI+PHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiByeD0iMjAiIGZpbGw9IiNlOGY1ZWUiLz48cmVjdCB4PSIxMCIgeT0iMTMiIHdpZHRoPSIyMCIgaGVpZ2h0PSIxNiIgcng9IjMiIGZpbGw9IiMyZDg2NTkiLz48Y2lyY2xlIGN4PSIxNSIgY3k9IjIwIiByPSIyLjUiIGZpbGw9IiNlOGY1ZWUiLz48Y2lyY2xlIGN4PSIyNSIgY3k9IjIwIiByPSIyLjUiIGZpbGw9IiNlOGY1ZWUiLz48cmVjdCB4PSIxNCIgeT0iMjUiIHdpZHRoPSIxMiIgaGVpZ2h0PSIyIiByeD0iMSIgZmlsbD0iI2U4ZjVlZSIvPjxsaW5lIHgxPSIyMCIgeTE9IjciIHgyPSIyMCIgeTI9IjEzIiBzdHJva2U9IiMyZDg2NTkiIHN0cm9rZS13aWR0aD0iMiIvPjxjaXJjbGUgY3g9IjIwIiBjeT0iNiIgcj0iMiIgZmlsbD0iIzJkODY1OSIvPjwvc3ZnPg==';
 
     function badge(status) {
       return '<span class="badge badge-' + status + '">' + status + '</span>';
@@ -434,7 +528,7 @@ def _dashboard_html() -> str:
       var html = '<div style="display:flex;flex-direction:column;">';
       threadTasks.forEach(function(t, idx) {
         var isClicked = (t.task_id === taskId);
-        var highlight = isClicked ? ' style="border:2px solid #667eea;"' : '';
+        var highlight = isClicked ? ' style="border:1px solid var(--accent);"' : '';
         html += '<div class="chat-row row-user">';
         html += '<img class="chat-avatar" src="' + AVATAR_USER + '" alt="User">';
         html += '<div class="chat-bubble chat-user"' + highlight + '>';
@@ -458,7 +552,7 @@ def _dashboard_html() -> str:
         }
         html += '</div>';
         if (idx < threadTasks.length - 1) {
-          html += '<hr style="border:none;border-top:1px dashed #ddd;margin:8px 0;">';
+          html += '<hr style="border:none;border-top:1px dashed var(--border);margin:8px 0;">';
         }
       });
       html += '</div>';
