@@ -125,6 +125,9 @@ def decide_message(config: AppConfig, message: SlackMessage) -> Decision:
     lock_key, command_text = _extract_lock_key(command_text)
     if not command_text:
         return Decision(should_run=False, reason="empty command after lock prefix", task=None)
+    normalized = _parse_simple_command(command_text)
+    if normalized:
+        command_text = normalized
 
     task_id = _build_task_id(message.channel_id, message.ts, message.text)
     thread_ts = str(message.raw.get("thread_ts") or message.ts)

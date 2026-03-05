@@ -22,6 +22,12 @@ _SETUP_DEFAULTS = {
     "CODEX_PERMISSION_MODE": "full-auto",
     "CODEX_SANDBOX_MODE": "workspace-write",
     "CLAUDE_PERMISSION_MODE": "acceptEdits",
+    "MEMORY_ENABLED": "false",
+    "MEMORY_MAX_PER_SCOPE": "100",
+    "MEMORY_RETENTION_DAYS": "90",
+    "MEMORY_INJECTION_MAX_CHARS": "2000",
+    "MEMORY_AUTO_EXTRACT": "false",
+    "MEMORY_DIR": "",
     "DRY_RUN": "true",
     "RUN_MODE": "approve",
     "APPROVAL_MODE": "reaction",
@@ -288,6 +294,39 @@ def _setup_form_html(defaults: dict[str, str], error: str = "") -> str:
         <div class="full">
           <label>Shell Allowlist (comma or whitespace separated)</label>
           <textarea name="SHELL_ALLOWLIST">{v("SHELL_ALLOWLIST")}</textarea>
+        </div>
+        <div class="full" style="margin-top:12px; border-top:1px solid #ddd; padding-top:12px;">
+          <label style="font-size:15px; font-weight:600; color:#111;">Memory</label>
+        </div>
+        <div>
+          <label>Memory Enabled</label>
+          <select name="MEMORY_ENABLED">
+            <option value="false" {"selected" if v("MEMORY_ENABLED").lower() != "true" else ""}>false</option>
+            <option value="true" {"selected" if v("MEMORY_ENABLED").lower() == "true" else ""}>true</option>
+          </select>
+        </div>
+        <div>
+          <label>Auto-Extract [MEMORY] Tags</label>
+          <select name="MEMORY_AUTO_EXTRACT">
+            <option value="false" {"selected" if v("MEMORY_AUTO_EXTRACT").lower() != "true" else ""}>false</option>
+            <option value="true" {"selected" if v("MEMORY_AUTO_EXTRACT").lower() == "true" else ""}>true</option>
+          </select>
+        </div>
+        <div>
+          <label>Max Memories Per Scope</label>
+          <input type="number" min="1" name="MEMORY_MAX_PER_SCOPE" value="{v("MEMORY_MAX_PER_SCOPE") or "100"}" />
+        </div>
+        <div>
+          <label>Retention Days</label>
+          <input type="number" min="1" name="MEMORY_RETENTION_DAYS" value="{v("MEMORY_RETENTION_DAYS") or "90"}" />
+        </div>
+        <div>
+          <label>Injection Max Chars</label>
+          <input type="number" min="0" name="MEMORY_INJECTION_MAX_CHARS" value="{v("MEMORY_INJECTION_MAX_CHARS") or "2000"}" />
+        </div>
+        <div>
+          <label>Memory Dir (optional)</label>
+          <input name="MEMORY_DIR" value="{v("MEMORY_DIR")}" placeholder="default: platform config dir" />
         </div>
       </div>
       <div class="actions">

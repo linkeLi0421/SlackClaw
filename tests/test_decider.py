@@ -176,6 +176,29 @@ class DeciderTests(unittest.TestCase):
         assert decision.task is not None
         self.assertEqual(decision.task.command_text, "memory:recall Python version")
 
+    def test_prefixed_simple_memory_command_is_normalized(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(channel_id="C111", ts="1.1", user="U1", text="!do memory store project uses uv", raw={})
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.command_text, "memory:store project uses uv")
+
+    def test_lock_prefix_with_simple_memory_command_is_normalized(self) -> None:
+        cfg = _config(trigger_mode="prefix")
+        msg = SlackMessage(
+            channel_id="C111",
+            ts="1.1",
+            user="U1",
+            text="!do lock:repo memory store release process uses tags",
+            raw={},
+        )
+        decision = decide_message(cfg, msg)
+        self.assertTrue(decision.should_run)
+        assert decision.task is not None
+        self.assertEqual(decision.task.lock_key, "lock:repo")
+        self.assertEqual(decision.task.command_text, "memory:store release process uses tags")
+
     def test_thread_lock_uses_thread_root_ts_for_agents(self) -> None:
         cfg = _config(trigger_mode="prefix")
         msg = SlackMessage(

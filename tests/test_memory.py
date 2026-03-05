@@ -9,10 +9,12 @@ from slackclaw.memory import (
     _delete_memory_file,
     _is_similar,
     _read_memory_file,
+    _scope_subdir,
     _write_memory_file,
     build_memory_context,
     extract_and_store_memories,
     extract_prompt_keywords,
+    extract_user_input_memories,
     handle_memory_command,
 )
 from slackclaw.models import MemoryCategory, MemoryRecord, MemoryScope
@@ -56,6 +58,10 @@ class TestIsSimilar(unittest.TestCase):
 
 
 class TestMemoryFileOps(unittest.TestCase):
+    def test_scope_subdir_sanitizes_thread_key_for_windows_paths(self) -> None:
+        subdir = _scope_subdir(MemoryScope.THREAD, "C0A7VR4J96X:1772664384.792709")
+        self.assertEqual(subdir, "thread/C0A7VR4J96X_1772664384.792709")
+
     def test_write_and_read_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             filepath = Path(tmpdir) / "test.md"
@@ -151,7 +157,7 @@ class TestHandleMemoryCommand(unittest.TestCase):
                 trigger_user="U1", channel_id="C1", thread_ts="1.1",
                 store=store, memory_dir_path=mem_dir,
             )
-            memories = store.list_memories("U1")
+            memories = store.list_memories("workspace")
             self.assertEqual(len(memories), 1)
             mem_id = memories[0].memory_id
 
@@ -322,6 +328,23 @@ class TestBuildMemoryContext(unittest.TestCase):
             self.assertEqual(ctx, "")
             store.close()
 
+    def test_fallback_to_recent_memories_when_keywords_do_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = _make_store(tmpdir)
+            mem_dir = str(Path(tmpdir) / "mem")
+            handle_memory_command(
+                "store", "workspace:My name is xiaoli and I answer with encouragement",
+                trigger_user="U1", channel_id="C1", thread_ts="1.1",
+                store=store, memory_dir_path=mem_dir,
+            )
+            ctx = build_memory_context(
+                store, trigger_user="U1", channel_id="C1", thread_ts="1.1",
+                prompt_text="who are you?",
+            )
+            self.assertIn("Relevant memories:", ctx)
+            self.assertIn("xiaoli", ctx)
+            store.close()
+
 
 class TestExtractAndStoreMemories(unittest.TestCase):
     def test_extracts_memory_tags(self) -> None:
@@ -336,11 +359,15 @@ class TestExtractAndStoreMemories(unittest.TestCase):
             )
             ids = extract_and_store_memories(
                 store, text, agent="claude", trigger_user="U1",
-                task_id="t1", memory_dir_path=mem_dir,
+                task_id="t1", channel_id="C1", thread_ts="1.1", memory_dir_path=mem_dir,
             )
             self.assertEqual(len(ids), 2)
             for mid in ids:
-                self.assertIsNotNone(store.get_memory(mid))
+                record = store.get_memory(mid)
+                self.assertIsNotNone(record)
+                assert record is not None
+                self.assertEqual(record.scope, MemoryScope.THREAD)
+                self.assertEqual(record.scope_key, "C1:1.1")
             store.close()
 
     def test_dedup_extraction(self) -> None:
@@ -350,11 +377,11 @@ class TestExtractAndStoreMemories(unittest.TestCase):
             text = "[MEMORY]: same fact\n"
             ids1 = extract_and_store_memories(
                 store, text, agent="claude", trigger_user="U1",
-                task_id="t1", memory_dir_path=mem_dir,
+                task_id="t1", channel_id="C1", thread_ts="1.1", memory_dir_path=mem_dir,
             )
             ids2 = extract_and_store_memories(
                 store, text, agent="claude", trigger_user="U1",
-                task_id="t2", memory_dir_path=mem_dir,
+                task_id="t2", channel_id="C1", thread_ts="1.1", memory_dir_path=mem_dir,
             )
             self.assertEqual(len(ids1), 1)
             self.assertEqual(len(ids2), 0)
@@ -368,6 +395,80 @@ class TestExtractAndStoreMemories(unittest.TestCase):
                 agent="claude", trigger_user="U1", task_id="t1",
             )
             self.assertEqual(ids, [])
+            store.close()
+
+
+class TestExtractUserInputMemories(unittest.TestCase):
+    def test_stores_name_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = _make_store(tmpdir)
+            mem_dir = str(Path(tmpdir) / "mem")
+            ids = extract_user_input_memories(
+                store,
+                "your name is xiaoli, you always answer with encouraging words",
+                trigger_user="U1", channel_id="C1", thread_ts="1.1",
+                task_id="t1", memory_dir_path=mem_dir,
+            )
+            self.assertEqual(len(ids), 1)
+            record = store.get_memory(ids[0])
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertEqual(record.scope, MemoryScope.USER)
+            self.assertEqual(record.category, MemoryCategory.PREFERENCE)
+            self.assertIn("xiaoli", record.content)
+            store.close()
+
+    def test_stores_always_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = _make_store(tmpdir)
+            mem_dir = str(Path(tmpdir) / "mem")
+            ids = extract_user_input_memories(
+                store,
+                "always use tabs instead of spaces",
+                trigger_user="U1", memory_dir_path=mem_dir,
+            )
+            self.assertEqual(len(ids), 1)
+            store.close()
+
+    def test_stores_remember_that_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = _make_store(tmpdir)
+            mem_dir = str(Path(tmpdir) / "mem")
+            ids = extract_user_input_memories(
+                store,
+                "remember that we deploy on Fridays",
+                trigger_user="U1", memory_dir_path=mem_dir,
+            )
+            self.assertEqual(len(ids), 1)
+            store.close()
+
+    def test_ignores_normal_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = _make_store(tmpdir)
+            ids = extract_user_input_memories(
+                store,
+                "explain how the memory system works",
+                trigger_user="U1",
+            )
+            self.assertEqual(ids, [])
+            store.close()
+
+    def test_dedup_identical_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = _make_store(tmpdir)
+            mem_dir = str(Path(tmpdir) / "mem")
+            ids1 = extract_user_input_memories(
+                store,
+                "your name is xiaoli",
+                trigger_user="U1", memory_dir_path=mem_dir,
+            )
+            ids2 = extract_user_input_memories(
+                store,
+                "your name is xiaoli",
+                trigger_user="U1", memory_dir_path=mem_dir,
+            )
+            self.assertEqual(len(ids1), 1)
+            self.assertEqual(len(ids2), 0)
             store.close()
 
 

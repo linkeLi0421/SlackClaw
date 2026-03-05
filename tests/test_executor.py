@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from subprocess import CompletedProcess
@@ -93,6 +94,12 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("I am kimi", result.details)
         cmd = mock_run.call_args.args[0]
         self.assertIn("--yolo", cmd)
+        kwargs = mock_run.call_args.kwargs
+        self.assertEqual(kwargs.get("encoding"), "utf-8")
+        self.assertEqual(kwargs.get("errors"), "replace")
+        env = kwargs.get("env") or {}
+        self.assertEqual(env.get("PYTHONIOENCODING"), "utf-8")
+        self.assertEqual(env.get("PYTHONUTF8"), "1")
 
     def test_kimi_prompt_includes_attached_file_paths(self) -> None:
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
@@ -131,7 +138,7 @@ class ExecutorTests(unittest.TestCase):
         executor = TaskExecutor(dry_run=False, timeout_seconds=30)
         with patch("slackclaw.executor.subprocess.run") as mock_run:
             mock_run.return_value = CompletedProcess(
-                args=["claude", "-p", "--permission-mode", "acceptEdits", "--", "review this repo"],
+                args=["claude", "--permission-mode", "acceptEdits", "-p", "review this repo"],
                 returncode=0,
                 stdout="claude done\n",
                 stderr="",
@@ -143,7 +150,9 @@ class ExecutorTests(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--permission-mode", cmd)
         self.assertIn("acceptEdits", cmd)
-        self.assertIn("--", cmd)
+        self.assertIn("-p", cmd)
+        self.assertEqual(cmd[-2], "-p")
+        self.assertIn("review this repo", cmd[-1])
 
     def test_agent_workdir_applies_to_all_agents_and_shell(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -186,7 +195,7 @@ class ExecutorTests(unittest.TestCase):
                 self.assertIn("--full-auto", codex_cmd)
                 self.assertIn("--add-dir", claude_cmd)
                 self.assertIn(tmpdir, claude_cmd)
-                self.assertIn("--", claude_cmd)
+                self.assertIn("-p", claude_cmd)
                 self.assertEqual(kimi_kwargs.get("cwd"), tmpdir)
                 self.assertEqual(codex_kwargs.get("cwd"), tmpdir)
                 self.assertEqual(claude_kwargs.get("cwd"), tmpdir)
@@ -327,16 +336,27 @@ class ExecutorTests(unittest.TestCase):
             executor = TaskExecutor(
                 dry_run=False, timeout_seconds=30,
                 memory_enabled=True, memory_dir=mem_dir,
+                agent_workdir=tmpdir,
             )
-            with patch("slackclaw.executor.subprocess.run") as mock_run:
-                mock_run.return_value = CompletedProcess(
-                    args=["claude"], returncode=0, stdout="done\n", stderr="",
-                )
+            claude_md = Path(tmpdir) / "CLAUDE.md"
+            claude_md.write_text("# Test\n", encoding="utf-8")
+            injected_content = None
+
+            original_run = subprocess.run
+            def capture_run(*args, **kwargs):
+                nonlocal injected_content
+                injected_content = claude_md.read_text(encoding="utf-8")
+                return CompletedProcess(args=["claude"], returncode=0, stdout="done\n", stderr="")
+
+            with patch("slackclaw.executor.subprocess.run", side_effect=capture_run):
                 executor.execute(_task("claude:explain the deployment process"), store=store)
 
-            prompt_arg = mock_run.call_args.args[0][-1]
-            self.assertIn("Relevant memories:", prompt_arg)
-            self.assertIn("Docker", prompt_arg)
+            # Memory context was injected into CLAUDE.md during execution
+            self.assertIsNotNone(injected_content)
+            self.assertIn("Relevant memories:", injected_content)
+            self.assertIn("Docker", injected_content)
+            # CLAUDE.md is restored after execution
+            self.assertEqual(claude_md.read_text(encoding="utf-8"), "# Test\n")
             store.close()
 
     def test_auto_extract_memories_from_agent_output(self) -> None:
@@ -356,10 +376,93 @@ class ExecutorTests(unittest.TestCase):
                 result = executor.execute(_task("claude:help me"), store=store)
 
             self.assertEqual(result.status, TaskStatus.SUCCEEDED)
-            memories = store.list_memories("U1")
+            memories = store.list_memories("C111:1.1")
             self.assertTrue(len(memories) >= 1)
             contents = [m.content for m in memories]
             self.assertTrue(any("Always run tests" in c for c in contents))
+            store.close()
+
+    def test_identity_query_includes_profile_hints_from_thread_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_thread_context(
+                "C111",
+                "1.1",
+                (
+                    "agent=kimi\n"
+                    "user=your name is xiaoli, you always answer with encouraging words.\n"
+                    "assistant=My name is xiaoli and I always answer with encouraging words."
+                ),
+            )
+            executor = TaskExecutor(
+                dry_run=False,
+                timeout_seconds=30,
+                memory_enabled=True,
+                agent_workdir=tmpdir,
+            )
+            claude_md = Path(tmpdir) / "CLAUDE.md"
+            claude_md.write_text("# Test\n", encoding="utf-8")
+            injected_content = None
+
+            def capture_run(*args, **kwargs):
+                nonlocal injected_content
+                injected_content = claude_md.read_text(encoding="utf-8")
+                return CompletedProcess(args=["claude"], returncode=0, stdout="ok\n", stderr="")
+
+            with patch("slackclaw.executor.subprocess.run", side_effect=capture_run):
+                executor.execute(_task("claude:who are you"), store=store)
+
+            # Profile hints are injected into CLAUDE.md during execution
+            self.assertIsNotNone(injected_content)
+            self.assertIn("Assistant profile:", injected_content)
+            self.assertIn("Preferred assistant name: xiaoli", injected_content)
+            self.assertIn("Preferred tone: encouraging and positive", injected_content)
+            self.assertIn("Identity response rule:", injected_content)
+            store.close()
+
+    def test_identity_query_uses_user_only_thread_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = StateStore(str(Path(tmpdir) / "state.db"))
+            store.init_schema()
+            store.upsert_thread_context(
+                "C111",
+                "1.1",
+                (
+                    "agent=codex\n"
+                    "user=who are you\n"
+                    "assistant=Please paste the hints after Conversation profile hints\n"
+                    "agent=kimi\n"
+                    "user=your name is xiaoli, you always answer with encouraging words\n"
+                    "assistant=My name is xiaoli\n"
+                ),
+            )
+            executor = TaskExecutor(
+                dry_run=False,
+                timeout_seconds=30,
+                memory_enabled=True,
+                agent_workdir=tmpdir,
+            )
+            agents_md = Path(tmpdir) / "AGENTS.md"
+            agents_md.write_text("# Test\n", encoding="utf-8")
+            injected_content = None
+
+            def capture_run(*args, **kwargs):
+                nonlocal injected_content
+                injected_content = agents_md.read_text(encoding="utf-8")
+                return CompletedProcess(args=["codex"], returncode=0, stdout="ok\n", stderr="")
+
+            with patch("slackclaw.executor.subprocess.run", side_effect=capture_run):
+                executor.execute(_task("codex:who are you"), store=store)
+
+            # Thread context is injected into AGENTS.md during execution
+            self.assertIsNotNone(injected_content)
+            self.assertIn("Shared thread context from previous user messages:", injected_content)
+            self.assertIn("- who are you", injected_content)
+            self.assertIn("- your name is xiaoli, you always answer with encouraging words", injected_content)
+            self.assertNotIn("Please paste the hints after Conversation profile hints", injected_content)
+            # AGENTS.md is restored after execution
+            self.assertEqual(agents_md.read_text(encoding="utf-8"), "# Test\n")
             store.close()
 
 

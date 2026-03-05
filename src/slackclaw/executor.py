@@ -1,17 +1,29 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
+from pathlib import Path
 from uuid import uuid4
 
-from .memory import build_memory_context, extract_and_store_memories, handle_memory_command
+from .memory import (
+    build_memory_context,
+    extract_and_store_memories,
+    handle_memory_command,
+)
 from .models import TaskExecutionResult, TaskSpec, TaskStatus
 from .state_store import StateStore
 
 
 _THREAD_CONTEXT_MAX_CHARS = 12000
+_IDENTITY_QUERY_RE = re.compile(
+    r"\b(who are you|what(?:'s| is) your name|do you know)\b",
+    re.IGNORECASE,
+)
+_THREAD_USER_LINE_RE = re.compile(r"^user=(.*)$", re.MULTILINE)
 
 
 def _resolve_cli(name: str) -> str:
@@ -30,6 +42,65 @@ _DEFAULT_AGENT_RESPONSE_INSTRUCTION = (
     "- Put commands/code in fenced code blocks.\n"
     "- Skip CLI metadata/log headers."
 )
+_MEMORY_EXTRACTION_INSTRUCTION = (
+    "If you discover an important fact, decision, user preference, or reusable procedure "
+    "worth remembering for future conversations, output it on its own line as:\n"
+    "[MEMORY]: <concise fact>\n"
+    "Examples:\n"
+    "[MEMORY]: Project uses Python 3.11 with pytest for testing\n"
+    "[MEMORY]: User prefers tabs over spaces\n"
+    "[MEMORY]: Deploy process: git tag vX.Y.Z then push to trigger CI\n"
+    "Only tag genuinely durable facts — skip transient details or things already in memory."
+)
+
+_MEMORY_SECTION_START = "\n\n<!-- SlackClaw Memory Context (auto-injected, do not edit) -->\n"
+_MEMORY_SECTION_END = "\n<!-- End SlackClaw Memory Context -->\n"
+
+
+@contextlib.contextmanager
+def _inject_memory_into_instructions(cwd: str, system_ctx: str, *, agent: str):
+    """Temporarily append memory context to CLAUDE.md / AGENTS.md in the cwd.
+
+    On exit, the original file content is restored (or the file is removed
+    if it was created by this function).
+    """
+    if not system_ctx or not cwd:
+        yield
+        return
+
+    # Map agent -> instruction file it reads
+    filenames: list[str] = []
+    if agent == "claude":
+        filenames = ["CLAUDE.md"]
+    elif agent == "codex":
+        filenames = ["AGENTS.md", "CODEX.md"]
+    else:
+        yield
+        return
+
+    originals: dict[str, str | None] = {}  # path -> original content (None = didn't exist)
+    section = f"{_MEMORY_SECTION_START}{system_ctx}{_MEMORY_SECTION_END}"
+
+    try:
+        for name in filenames:
+            filepath = os.path.join(cwd, name)
+            if os.path.isfile(filepath):
+                originals[filepath] = Path(filepath).read_text(encoding="utf-8")
+                with open(filepath, "a", encoding="utf-8") as f:
+                    f.write(section)
+            else:
+                originals[filepath] = None
+                Path(filepath).write_text(section.lstrip(), encoding="utf-8")
+        yield
+    finally:
+        for filepath, original in originals.items():
+            try:
+                if original is None:
+                    os.remove(filepath)
+                else:
+                    Path(filepath).write_text(original, encoding="utf-8")
+            except Exception:
+                pass
 
 
 class TaskExecutor:
@@ -56,6 +127,15 @@ class TaskExecutor:
         self._codex_permission_mode = (os.environ.get("CODEX_PERMISSION_MODE") or "full-auto").strip().lower()
         self._codex_sandbox_mode = (os.environ.get("CODEX_SANDBOX_MODE") or "workspace-write").strip().lower()
         self._claude_permission_mode = (os.environ.get("CLAUDE_PERMISSION_MODE") or "acceptEdits").strip()
+
+    @staticmethod
+    def _agent_env() -> dict[str, str]:
+        env = os.environ.copy()
+        # Force UTF-8 for Python-based CLIs on Windows to avoid cp1252/charmap failures
+        # when prompts or model outputs include emoji/non-ASCII text.
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        return env
 
     def execute(self, task: TaskSpec, *, store: StateStore | None = None) -> TaskExecutionResult:
         if self._dry_run:
@@ -239,10 +319,13 @@ class TaskExecutor:
             completed = subprocess.run(
                 cmd,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 capture_output=True,
                 timeout=self._timeout_seconds,
                 check=False,
                 cwd=run_cwd,
+                env=self._agent_env(),
             )
         except subprocess.TimeoutExpired:
             return TaskExecutionResult(
@@ -277,9 +360,18 @@ class TaskExecutor:
 
     def _run_codex(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> TaskExecutionResult:
         existing_session_id = store.get_agent_session(task.channel_id, task.thread_ts, "codex") if store else None
-        prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
+        system_ctx = self._build_system_context(prompt, task=task, store=store)
+        user_prompt = prompt
+        if task.attachment_paths:
+            attachment_list = "\n".join(f"- {path}" for path in task.attachment_paths)
+            user_prompt = (
+                f"{user_prompt}\n\n"
+                "Attached file paths on local disk:\n"
+                f"{attachment_list}"
+            )
         run_cwd = self._run_cwd()
         codex_cwd = run_cwd or os.getcwd()
+        instruction_cwd = run_cwd or os.getcwd()
         codex_bin = _resolve_cli("codex")
         if existing_session_id:
             cmd = [
@@ -293,7 +385,7 @@ class TaskExecutor:
                     "--skip-git-repo-check",
                     "--json",
                     existing_session_id,
-                    prompt_with_context,
+                    user_prompt,
                 ]
             )
         else:
@@ -306,30 +398,35 @@ class TaskExecutor:
                 [
                     "--skip-git-repo-check",
                     "--json",
-                    prompt_with_context,
+                    user_prompt,
                 ]
             )
-        try:
-            completed = subprocess.run(
-                cmd,
-                text=True,
-                capture_output=True,
-                timeout=self._timeout_seconds,
-                check=False,
-                cwd=run_cwd,
-            )
-        except subprocess.TimeoutExpired:
-            return TaskExecutionResult(
-                status=TaskStatus.FAILED,
-                summary=f"codex command timed out after {self._timeout_seconds}s",
-                details=prompt_with_context,
-            )
-        except Exception as exc:  # pragma: no cover - OS-level failures
-            return TaskExecutionResult(
-                status=TaskStatus.FAILED,
-                summary=f"codex execution failed: {exc}",
-                details=prompt_with_context,
-            )
+
+        with _inject_memory_into_instructions(instruction_cwd, system_ctx, agent="codex"):
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    timeout=self._timeout_seconds,
+                    check=False,
+                    cwd=run_cwd,
+                    env=self._agent_env(),
+                )
+            except subprocess.TimeoutExpired:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary=f"codex command timed out after {self._timeout_seconds}s",
+                    details=user_prompt,
+                )
+            except Exception as exc:  # pragma: no cover - OS-level failures
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary=f"codex execution failed: {exc}",
+                    details=user_prompt,
+                )
 
         events = self._parse_json_events(completed.stdout or "")
         session_id = self._extract_codex_session_id(events) or existing_session_id
@@ -355,15 +452,22 @@ class TaskExecutor:
         )
 
     def _run_claude(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> TaskExecutionResult:
-        prompt_with_context = self._prompt_with_context(prompt, task=task, store=store)
+        system_ctx = self._build_system_context(prompt, task=task, store=store)
+        user_prompt = prompt
+        if task.attachment_paths:
+            attachment_list = "\n".join(f"- {path}" for path in task.attachment_paths)
+            user_prompt = (
+                f"{user_prompt}\n\n"
+                "Attached file paths on local disk (use the Read tool to open them):\n"
+                f"{attachment_list}"
+            )
         run_cwd = self._run_cwd()
-        cmd = [_resolve_cli("claude"), "-p"]
+        instruction_cwd = run_cwd or os.getcwd()
+        cmd = [_resolve_cli("claude")]
         if self._claude_permission_mode:
             cmd.extend(["--permission-mode", self._claude_permission_mode])
         if run_cwd:
             cmd.extend(["--add-dir", run_cwd])
-        # Grant Claude Code read access to the attachment directory so it can
-        # open downloaded files (images, PDFs, etc.) with the Read tool.
         if task.attachment_paths:
             seen_dirs: set[str] = set()
             for path in task.attachment_paths:
@@ -371,28 +475,33 @@ class TaskExecutor:
                 if parent and parent not in seen_dirs:
                     seen_dirs.add(parent)
                     cmd.extend(["--add-dir", parent])
-        cmd.extend(["--", prompt_with_context])
-        try:
-            completed = subprocess.run(
-                cmd,
-                text=True,
-                capture_output=True,
-                timeout=self._timeout_seconds,
-                check=False,
-                cwd=run_cwd,
-            )
-        except subprocess.TimeoutExpired:
-            return TaskExecutionResult(
-                status=TaskStatus.FAILED,
-                summary=f"claude command timed out after {self._timeout_seconds}s",
-                details=prompt_with_context,
-            )
-        except Exception as exc:  # pragma: no cover - OS-level failures
-            return TaskExecutionResult(
-                status=TaskStatus.FAILED,
-                summary=f"claude execution failed: {exc}",
-                details=prompt_with_context,
-            )
+        cmd.extend(["-p", user_prompt])
+
+        with _inject_memory_into_instructions(instruction_cwd, system_ctx, agent="claude"):
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    timeout=self._timeout_seconds,
+                    check=False,
+                    cwd=run_cwd,
+                    env=self._agent_env(),
+                )
+            except subprocess.TimeoutExpired:
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary=f"claude command timed out after {self._timeout_seconds}s",
+                    details=user_prompt,
+                )
+            except Exception as exc:  # pragma: no cover - OS-level failures
+                return TaskExecutionResult(
+                    status=TaskStatus.FAILED,
+                    summary=f"claude execution failed: {exc}",
+                    details=user_prompt,
+                )
 
         stdout = (completed.stdout or "").strip()
         stderr = (completed.stderr or "").strip()
@@ -488,9 +597,15 @@ class TaskExecutor:
             return
         store.upsert_agent_session(task.channel_id, task.thread_ts, agent, session_id)
 
-    def _prompt_with_context(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> str:
-        # Build memory context if enabled
-        memory_section = ""
+    def _build_system_context(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> str:
+        """Build a system-level context string (memory, profile, thread context, format instructions).
+
+        This is injected via --append-system-prompt for Claude Code or prepended
+        for agents that lack a system prompt flag.
+        """
+        parts: list[str] = []
+
+        # Memory context
         if self._memory_enabled and store is not None:
             memory_section = build_memory_context(
                 store,
@@ -500,24 +615,67 @@ class TaskExecutor:
                 prompt_text=prompt,
                 max_chars=self._memory_injection_max_chars,
             )
+            if memory_section:
+                parts.append(memory_section)
 
-        if store is None:
-            base_prompt = prompt
-        else:
+        # Profile hints from thread context and memories
+        context = ""
+        if store is not None:
             context = store.get_thread_context(task.channel_id, task.thread_ts).strip()
-            if not context:
-                base_prompt = prompt
-            else:
-                base_prompt = (
-                    "Shared thread context from previous agent runs:\n"
-                    f"{context}\n\n"
-                    f"Current request:\n{prompt}"
+        identity_query = bool(_IDENTITY_QUERY_RE.search(prompt))
+
+        profile_hints = self._conversation_profile_hints(
+            prompt=prompt,
+            context=context,
+            task=task,
+            store=store,
+        )
+        if profile_hints:
+            parts.append(profile_hints)
+            if identity_query:
+                parts.append(
+                    "Identity response rule:\n"
+                    "- If the user asks about your identity or name, answer directly using profile hints.\n"
+                    "- Do not claim memory is missing when profile hints are present.\n"
+                    "- Keep it brief: one short paragraph plus up to 3 bullets."
                 )
 
-        # Prepend memory context before everything else
-        if memory_section:
-            base_prompt = f"{memory_section}\n\n{base_prompt}"
+        # Thread context
+        if context:
+            if identity_query:
+                user_only = self._user_only_thread_context(context)
+                if user_only:
+                    parts.append(
+                        "Shared thread context from previous user messages:\n"
+                        f"{user_only}"
+                    )
+            else:
+                parts.append(
+                    "Shared thread context from previous agent runs:\n"
+                    f"{context}"
+                )
 
+        # Response format instructions
+        if self._response_format_instruction:
+            parts.append(
+                "Response format requirements:\n"
+                f"{self._response_format_instruction}"
+            )
+
+        # Memory extraction instruction
+        if self._memory_enabled and self._memory_auto_extract:
+            parts.append(_MEMORY_EXTRACTION_INSTRUCTION)
+
+        return "\n\n".join(parts)
+
+    def _prompt_with_context(self, prompt: str, *, task: TaskSpec, store: StateStore | None) -> str:
+        """Build a single combined prompt (system context + user prompt).
+
+        Used by Kimi and as fallback when separate system prompt injection is not available.
+        """
+        system_ctx = self._build_system_context(prompt, task=task, store=store)
+
+        base_prompt = prompt
         if task.attachment_paths:
             attachment_list = "\n".join(f"- {path}" for path in task.attachment_paths)
             base_prompt = (
@@ -526,13 +684,61 @@ class TaskExecutor:
                 f"{attachment_list}"
             )
 
-        if not self._response_format_instruction:
-            return base_prompt
-        return (
-            f"{base_prompt}\n\n"
-            "Response format requirements:\n"
-            f"{self._response_format_instruction}"
-        )
+        if system_ctx:
+            return f"{system_ctx}\n\n{base_prompt}"
+        return base_prompt
+
+    @staticmethod
+    def _conversation_profile_hints(
+        *,
+        prompt: str,
+        context: str,
+        task: TaskSpec,
+        store: StateStore | None,
+    ) -> str:
+        blobs: list[str] = []
+        if context:
+            blobs.append(context)
+
+        if store is not None:
+            scope_keys = [f"{task.channel_id}:{task.thread_ts}", "workspace", task.trigger_user]
+            for key in scope_keys:
+                for mem in store.list_memories(key, limit=8):
+                    blobs.append(mem.content)
+
+        if not blobs:
+            return ""
+
+        merged = "\n".join(blobs)
+        name = ""
+        for pattern in (
+            r"\bmy name is\s+([A-Za-z0-9_.-]{2,40})\b",
+            r"\bi(?:'m| am)\s+([A-Za-z0-9_.-]{2,40})\b",
+            r"\byour name is\s+([A-Za-z0-9_.-]{2,40})\b",
+        ):
+            for match in re.finditer(pattern, merged, flags=re.IGNORECASE):
+                candidate = match.group(1).strip()
+                if candidate:
+                    name = candidate
+
+        lines: list[str] = []
+        if name:
+            lines.append(f"- Preferred assistant name: {name}")
+        if re.search(r"encourag", merged, flags=re.IGNORECASE):
+            lines.append("- Preferred tone: encouraging and positive")
+
+        if not lines:
+            return ""
+        return "Assistant profile:\n" + "\n".join(lines)
+
+    @staticmethod
+    def _user_only_thread_context(context: str, max_items: int = 8) -> str:
+        lines = [m.group(1).strip() for m in _THREAD_USER_LINE_RE.finditer(context)]
+        lines = [ln for ln in lines if ln]
+        if not lines:
+            return ""
+        recent = lines[-max_items:]
+        return "\n".join(f"- {line}" for line in recent)
 
     def _run_cwd(self) -> str | None:
         configured = self._agent_workdir
@@ -570,6 +776,8 @@ class TaskExecutor:
             extract_and_store_memories(
                 store, result_text, agent,
                 trigger_user=task.trigger_user,
+                channel_id=task.channel_id,
+                thread_ts=task.thread_ts,
                 task_id=task.task_id,
                 memory_dir_path=self._memory_dir,
             )

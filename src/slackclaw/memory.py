@@ -70,10 +70,11 @@ def _delete_memory_file(file_path: Path) -> None:
 
 
 def _scope_subdir(scope: MemoryScope, scope_key: str) -> str:
+    safe_scope_key = re.sub(r"[^A-Za-z0-9._-]+", "_", scope_key).strip("._") or "default"
     if scope == MemoryScope.USER:
-        return f"user/{scope_key}"
+        return f"user/{safe_scope_key}"
     if scope == MemoryScope.THREAD:
-        return f"thread/{scope_key}"
+        return f"thread/{safe_scope_key}"
     return "workspace"
 
 
@@ -105,7 +106,12 @@ def handle_memory_command(
 
     if sub == "store":
         return _cmd_store(
-            args, trigger_user=trigger_user, store=store, base_dir=base_dir,
+            args,
+            trigger_user=trigger_user,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            store=store,
+            base_dir=base_dir,
         )
     if sub == "recall":
         return _cmd_recall(
@@ -115,7 +121,12 @@ def handle_memory_command(
     if sub == "forget":
         return _cmd_forget(args, store=store)
     if sub == "list":
-        return _cmd_list(trigger_user=trigger_user, store=store)
+        return _cmd_list(
+            trigger_user=trigger_user,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            store=store,
+        )
     return "unknown memory subcommand", f"expected store|recall|forget|list, got: {sub}"
 
 
@@ -123,21 +134,34 @@ def _cmd_store(
     text: str,
     *,
     trigger_user: str,
+    channel_id: str,
+    thread_ts: str,
     store: StateStore,
     base_dir: Path,
 ) -> tuple[str, str]:
     if not text.strip():
         return "memory store failed", "empty content"
 
-    # workspace scope
-    if text.lower().startswith("workspace:"):
-        content = text[len("workspace:"):].strip()
+    raw = text.strip()
+    lowered = raw.lower()
+
+    # Default manual stores to workspace scope.
+    scope = MemoryScope.WORKSPACE
+    scope_key = "workspace"
+    content = raw
+
+    if lowered.startswith("workspace:"):
+        content = raw[len("workspace:"):].strip()
         scope = MemoryScope.WORKSPACE
         scope_key = "workspace"
-    else:
-        content = text.strip()
+    elif lowered.startswith("user:"):
+        content = raw[len("user:"):].strip()
         scope = MemoryScope.USER
         scope_key = trigger_user
+    elif lowered.startswith("thread:"):
+        content = raw[len("thread:"):].strip()
+        scope = MemoryScope.THREAD
+        scope_key = f"{channel_id}:{thread_ts}"
 
     if not content:
         return "memory store failed", "empty content after scope prefix"
@@ -203,8 +227,28 @@ def _cmd_forget(memory_id: str, *, store: StateStore) -> tuple[str, str]:
     return "memory deleted", f"id={memory_id} content={record.content[:80]}"
 
 
-def _cmd_list(*, trigger_user: str, store: StateStore) -> tuple[str, str]:
-    results = store.list_memories(trigger_user, limit=20)
+def _cmd_list(
+    *,
+    trigger_user: str,
+    channel_id: str,
+    thread_ts: str,
+    store: StateStore,
+) -> tuple[str, str]:
+    scope_keys = [f"{trigger_user}", "workspace"]
+    if channel_id and thread_ts:
+        scope_keys.append(f"{channel_id}:{thread_ts}")
+    # Also include thread-local scope entries if they share the common C:T key format.
+    # list_memories is keyed by scope_key only, so we include all known keys and de-dup by id.
+    results: list[MemoryRecord] = []
+    seen: set[str] = set()
+    for key in scope_keys:
+        for rec in store.list_memories(key, limit=20):
+            if rec.memory_id in seen:
+                continue
+            seen.add(rec.memory_id)
+            results.append(rec)
+    results.sort(key=lambda r: r.updated_at, reverse=True)
+    results = results[:20]
     if not results:
         return "no memories found", "you have no stored memories"
     lines = [f"- [{r.memory_id}] ({r.category.value}) {r.content[:120]}" for r in results]
@@ -247,16 +291,26 @@ def build_memory_context(
     prompt_text: str,
     max_chars: int = 2000,
 ) -> str:
-    keywords = extract_prompt_keywords(prompt_text)
-    if not keywords:
+    if not prompt_text.strip():
         return ""
 
     scope_keys = [trigger_user, "workspace"]
     if channel_id and thread_ts:
         scope_keys.append(f"{channel_id}:{thread_ts}")
-
-    query = " OR ".join(keywords)
-    results = store.search_memories(scope_keys=scope_keys, query=query, limit=10)
+    keywords = extract_prompt_keywords(prompt_text)
+    results: list[MemoryRecord] = []
+    if keywords:
+        query = " OR ".join(keywords)
+        results = store.search_memories(scope_keys=scope_keys, query=query, limit=10)
+    if not results:
+        # Fallback: for short/ambiguous prompts (e.g. "who are you?"), inject a few
+        # recent memories so the agent can still preserve identity/preferences.
+        results = _recent_memories_for_scopes(
+            store,
+            scope_keys=_preferred_scope_order(scope_keys, channel_id=channel_id, thread_ts=thread_ts),
+            limit_total=6,
+            limit_per_scope=3,
+        )
     if not results:
         return ""
 
@@ -277,6 +331,36 @@ def build_memory_context(
     return "Relevant memories:\n" + "\n".join(lines)
 
 
+def _preferred_scope_order(scope_keys: list[str], *, channel_id: str, thread_ts: str) -> list[str]:
+    ordered: list[str] = []
+    if channel_id and thread_ts:
+        ordered.append(f"{channel_id}:{thread_ts}")
+    ordered.append("workspace")
+    for key in scope_keys:
+        if key not in ordered:
+            ordered.append(key)
+    return ordered
+
+
+def _recent_memories_for_scopes(
+    store: StateStore,
+    *,
+    scope_keys: list[str],
+    limit_total: int,
+    limit_per_scope: int,
+) -> list[MemoryRecord]:
+    merged: list[MemoryRecord] = []
+    seen: set[str] = set()
+    for key in scope_keys:
+        for rec in store.list_memories(key, limit=limit_per_scope):
+            if rec.memory_id in seen:
+                continue
+            seen.add(rec.memory_id)
+            merged.append(rec)
+    merged.sort(key=lambda r: r.updated_at, reverse=True)
+    return merged[:limit_total]
+
+
 # --- Phase 3: Auto-extraction ---
 
 _MEMORY_TAG_RE = re.compile(
@@ -290,6 +374,8 @@ def extract_and_store_memories(
     agent: str,
     trigger_user: str,
     task_id: str,
+    channel_id: str = "",
+    thread_ts: str = "",
     memory_dir_path: str = "",
 ) -> list[str]:
     """Scan result_text for [MEMORY]: or [REMEMBER]: tags and store them.
@@ -304,8 +390,13 @@ def extract_and_store_memories(
         content = content.strip()
         if not content:
             continue
-        scope = MemoryScope.USER
-        scope_key = trigger_user
+        if channel_id and thread_ts:
+            scope = MemoryScope.THREAD
+            scope_key = f"{channel_id}:{thread_ts}"
+        else:
+            # Backward-compatible fallback if thread metadata is unavailable.
+            scope = MemoryScope.USER
+            scope_key = trigger_user
         memory_id = _build_memory_id(scope.value, scope_key, content)
         now = datetime.now(UTC).isoformat()
         subdir = _scope_subdir(scope, scope_key)
@@ -334,3 +425,74 @@ def extract_and_store_memories(
         stored_ids.append(memory_id)
 
     return stored_ids
+
+
+# Patterns that indicate the user's input itself is a fact/preference worth storing.
+_USER_INPUT_MEMORY_PATTERNS = [
+    re.compile(
+        r"(?:your\s+name\s+is|call\s+(?:yourself|you)\s+|you\s+are\s+called)\s+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:always|never|from\s+now\s+on|remember\s+(?:that|to)|don'?t\s+forget)\s+",
+        re.IGNORECASE,
+    ),
+]
+
+
+def extract_user_input_memories(
+    store: StateStore,
+    user_input: str,
+    *,
+    trigger_user: str,
+    channel_id: str = "",
+    thread_ts: str = "",
+    task_id: str = "",
+    memory_dir_path: str = "",
+) -> list[str]:
+    """Auto-store user input when it matches preference/identity patterns.
+
+    Returns list of stored memory IDs.
+    """
+    if not user_input or not user_input.strip():
+        return []
+
+    text = user_input.strip()
+    matched = any(pat.search(text) for pat in _USER_INPUT_MEMORY_PATTERNS)
+    if not matched:
+        return []
+
+    base_dir = _memory_dir(memory_dir_path)
+    scope = MemoryScope.USER
+    scope_key = trigger_user
+    memory_id = _build_memory_id(scope.value, scope_key, text)
+
+    existing = store.get_memory(memory_id)
+    if existing is not None:
+        return []
+
+    # Dedup by similarity against existing user memories
+    for rec in store.list_memories(scope_key, limit=50):
+        if _is_similar(rec.content, text):
+            return []
+
+    now = datetime.now(UTC).isoformat()
+    subdir = _scope_subdir(scope, scope_key)
+    file_path = base_dir / subdir / f"{memory_id}.md"
+
+    record = MemoryRecord(
+        memory_id=memory_id,
+        scope=scope,
+        scope_key=scope_key,
+        category=MemoryCategory.PREFERENCE,
+        content=text,
+        file_path=str(file_path),
+        source_task_id=task_id,
+        source_agent="user",
+        created_at=now,
+        updated_at=now,
+        last_accessed_at=now,
+    )
+    _write_memory_file(file_path, record)
+    store.upsert_memory(record)
+    return [memory_id]
