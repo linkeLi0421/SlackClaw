@@ -189,7 +189,7 @@ CLAUDE, CODEX, and KIMI commands are thread-aware:
 
 ### Persistent Memory
 
-When `MEMORY_ENABLED=true`, AI agents can recall facts, preferences, and procedures across conversations. Memory is stored as human-readable Markdown files and indexed with SQLite FTS5 for fast full-text search.
+When `MEMORY_ENABLED=true`, AI agents can recall facts, preferences, and procedures across conversations. Memory is stored as human-readable Markdown files and indexed with SQLite FTS5 for fast full-text search. See [Memory System Documentation](docs/memory-system.md) for full details on scopes, storage, prompt injection, auto-extraction, and agent integration.
 
 **Manual commands:**
 ```
