@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from uuid import uuid4
 
 from .memory import (
@@ -433,52 +432,41 @@ class TaskExecutor:
                     seen_dirs.add(parent)
                     cmd.extend(["--add-dir", parent])
 
-        # Write system context to a temp file and inject via
-        # --append-system-prompt so it is treated as a system-level
-        # instruction rather than part of the user prompt.
-        sys_prompt_file: str | None = None
-        try:
-            if system_ctx:
-                fd, sys_prompt_file = tempfile.mkstemp(
-                    suffix=".md", prefix="slackclaw_ctx_",
-                )
-                os.write(fd, system_ctx.encode("utf-8"))
-                os.close(fd)
-                with open(sys_prompt_file, encoding="utf-8") as f:
-                    sys_prompt_content = f.read()
-                cmd.extend(["--append-system-prompt", sys_prompt_content])
-            cmd.extend(["-p", user_prompt])
+        # Pipe combined system context + user prompt via stdin to avoid
+        # Windows CLI argument parsing issues with long multiline content.
+        # Claude with -p reads from stdin when no positional prompt is given.
+        stdin_text: str | None = None
+        if system_ctx:
+            stdin_text = f"{system_ctx}\n\n{user_prompt}"
+        else:
+            stdin_text = user_prompt
+        cmd.append("-p")
 
-            try:
-                completed = subprocess.run(
-                    cmd,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    capture_output=True,
-                    timeout=self._timeout_seconds,
-                    check=False,
-                    cwd=run_cwd,
-                    env=self._agent_env(),
-                )
-            except subprocess.TimeoutExpired:
-                return TaskExecutionResult(
-                    status=TaskStatus.FAILED,
-                    summary=f"claude command timed out after {self._timeout_seconds}s",
-                    details=user_prompt,
-                )
-            except Exception as exc:  # pragma: no cover - OS-level failures
-                return TaskExecutionResult(
-                    status=TaskStatus.FAILED,
-                    summary=f"claude execution failed: {exc}",
-                    details=user_prompt,
-                )
-        finally:
-            if sys_prompt_file:
-                try:
-                    os.unlink(sys_prompt_file)
-                except Exception:
-                    pass
+        try:
+            completed = subprocess.run(
+                cmd,
+                input=stdin_text,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=self._timeout_seconds,
+                check=False,
+                cwd=run_cwd,
+                env=self._agent_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"claude command timed out after {self._timeout_seconds}s",
+                details=user_prompt,
+            )
+        except Exception as exc:  # pragma: no cover - OS-level failures
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"claude execution failed: {exc}",
+                details=user_prompt,
+            )
 
         stdout = (completed.stdout or "").strip()
         stderr = (completed.stderr or "").strip()

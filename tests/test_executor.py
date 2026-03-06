@@ -151,8 +151,10 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("--permission-mode", cmd)
         self.assertIn("acceptEdits", cmd)
         self.assertIn("-p", cmd)
-        self.assertEqual(cmd[-2], "-p")
-        self.assertIn("review this repo", cmd[-1])
+        self.assertEqual(cmd[-1], "-p")
+        # User prompt is piped via stdin, not as a positional arg
+        stdin_text = mock_run.call_args.kwargs.get("input", "")
+        self.assertIn("review this repo", stdin_text)
 
     def test_agent_workdir_applies_to_all_agents_and_shell(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -343,15 +345,12 @@ class ExecutorTests(unittest.TestCase):
                 )
                 executor.execute(_task("claude:explain the deployment process"), store=store)
 
-            # For Claude, memory context is injected via --append-system-prompt
+            # For Claude, memory context is piped via stdin (same as Codex)
             cmd_args = mock_run.call_args.args[0]
-            self.assertIn("--append-system-prompt", cmd_args)
-            sys_idx = cmd_args.index("--append-system-prompt")
-            sys_prompt = cmd_args[sys_idx + 1]
-            self.assertIn("Relevant memories:", sys_prompt)
-            self.assertIn("Docker", sys_prompt)
-            # User prompt is passed via -p as a separate positional arg
             self.assertIn("-p", cmd_args)
+            stdin_text = mock_run.call_args.kwargs.get("input", "")
+            self.assertIn("Relevant memories:", stdin_text)
+            self.assertIn("Docker", stdin_text)
             store.close()
 
     def test_auto_extract_memories_from_agent_output(self) -> None:
@@ -401,15 +400,14 @@ class ExecutorTests(unittest.TestCase):
                 )
                 executor.execute(_task("claude:who are you"), store=store)
 
-            # Profile hints are in --append-system-prompt
+            # Profile hints are piped via stdin
             cmd_args = mock_run.call_args.args[0]
-            self.assertIn("--append-system-prompt", cmd_args)
-            sys_idx = cmd_args.index("--append-system-prompt")
-            sys_prompt = cmd_args[sys_idx + 1]
-            self.assertIn("Assistant profile:", sys_prompt)
-            self.assertIn("Preferred assistant name: xiaoli", sys_prompt)
-            self.assertIn("Preferred tone: encouraging and positive", sys_prompt)
-            self.assertIn("Identity response rule:", sys_prompt)
+            self.assertIn("-p", cmd_args)
+            stdin_text = mock_run.call_args.kwargs.get("input", "")
+            self.assertIn("Assistant profile:", stdin_text)
+            self.assertIn("Preferred assistant name: xiaoli", stdin_text)
+            self.assertIn("Preferred tone: encouraging and positive", stdin_text)
+            self.assertIn("Identity response rule:", stdin_text)
             store.close()
 
     def test_identity_query_uses_user_only_thread_context(self) -> None:
