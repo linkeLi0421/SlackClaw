@@ -432,20 +432,17 @@ class TaskExecutor:
                     seen_dirs.add(parent)
                     cmd.extend(["--add-dir", parent])
 
-        # Pipe combined system context + user prompt via stdin to avoid
-        # Windows CLI argument parsing issues with long multiline content.
-        # Claude with -p reads from stdin when no positional prompt is given.
-        stdin_text: str | None = None
+        # System context goes via --append-system-prompt (treated as system
+        # instructions, not user input).  User prompt is piped via stdin to
+        # avoid Windows CLI argument length limits.
         if system_ctx:
-            stdin_text = f"{system_ctx}\n\n{user_prompt}"
-        else:
-            stdin_text = user_prompt
+            cmd.extend(["--append-system-prompt", system_ctx])
         cmd.append("-p")
 
         try:
             completed = subprocess.run(
                 cmd,
-                input=stdin_text,
+                input=user_prompt,
                 text=True,
                 encoding="utf-8",
                 errors="replace",

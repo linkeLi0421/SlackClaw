@@ -345,12 +345,16 @@ class ExecutorTests(unittest.TestCase):
                 )
                 executor.execute(_task("claude:explain the deployment process"), store=store)
 
-            # For Claude, memory context is piped via stdin (same as Codex)
+            # Memory context is in --append-system-prompt, user prompt via stdin
             cmd_args = mock_run.call_args.args[0]
-            self.assertIn("-p", cmd_args)
+            self.assertIn("--append-system-prompt", cmd_args)
+            sys_idx = cmd_args.index("--append-system-prompt")
+            sys_prompt = cmd_args[sys_idx + 1]
+            self.assertIn("Relevant memories:", sys_prompt)
+            self.assertIn("Docker", sys_prompt)
+            # User prompt piped via stdin
             stdin_text = mock_run.call_args.kwargs.get("input", "")
-            self.assertIn("Relevant memories:", stdin_text)
-            self.assertIn("Docker", stdin_text)
+            self.assertIn("explain the deployment process", stdin_text)
             store.close()
 
     def test_auto_extract_memories_from_agent_output(self) -> None:
@@ -400,14 +404,15 @@ class ExecutorTests(unittest.TestCase):
                 )
                 executor.execute(_task("claude:who are you"), store=store)
 
-            # Profile hints are piped via stdin
+            # Profile hints are in --append-system-prompt
             cmd_args = mock_run.call_args.args[0]
-            self.assertIn("-p", cmd_args)
-            stdin_text = mock_run.call_args.kwargs.get("input", "")
-            self.assertIn("Assistant profile:", stdin_text)
-            self.assertIn("Preferred assistant name: xiaoli", stdin_text)
-            self.assertIn("Preferred tone: encouraging and positive", stdin_text)
-            self.assertIn("Identity response rule:", stdin_text)
+            self.assertIn("--append-system-prompt", cmd_args)
+            sys_idx = cmd_args.index("--append-system-prompt")
+            sys_prompt = cmd_args[sys_idx + 1]
+            self.assertIn("Assistant profile:", sys_prompt)
+            self.assertIn("Preferred assistant name: xiaoli", sys_prompt)
+            self.assertIn("Preferred tone: encouraging and positive", sys_prompt)
+            self.assertIn("Identity response rule:", sys_prompt)
             store.close()
 
     def test_identity_query_uses_user_only_thread_context(self) -> None:
