@@ -4,7 +4,7 @@ import hashlib
 import os
 import re
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import MemoryCategory, MemoryRecord, MemoryScope
@@ -173,7 +173,7 @@ def _cmd_store(
             return "memory already exists (duplicate)", f"similar to memory {mem.memory_id}: {mem.content[:80]}"
 
     memory_id = _build_memory_id(scope.value, scope_key, content)
-    now = datetime.now(UTC).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     subdir = _scope_subdir(scope, scope_key)
     file_path = base_dir / subdir / f"{memory_id}.md"
 
@@ -398,7 +398,7 @@ def extract_and_store_memories(
             scope = MemoryScope.USER
             scope_key = trigger_user
         memory_id = _build_memory_id(scope.value, scope_key, content)
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         subdir = _scope_subdir(scope, scope_key)
         file_path = base_dir / subdir / f"{memory_id}.md"
 
@@ -476,7 +476,7 @@ def extract_user_input_memories(
         if _is_similar(rec.content, text):
             return []
 
-    now = datetime.now(UTC).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     subdir = _scope_subdir(scope, scope_key)
     file_path = base_dir / subdir / f"{memory_id}.md"
 

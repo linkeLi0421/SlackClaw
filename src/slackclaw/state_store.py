@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import (
@@ -18,7 +18,7 @@ from .models import (
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 class StateStore:
@@ -714,7 +714,7 @@ class StateStore:
 
     def purge_old_memories(self, retention_days: int) -> list[str]:
         from datetime import timedelta
-        cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         rows = self._conn.execute(
             "SELECT memory_id, file_path FROM memories WHERE last_accessed_at < ?",
             (cutoff,),

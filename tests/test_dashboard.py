@@ -42,6 +42,12 @@ def _test_config(db_path: str) -> AppConfig:
 
 
 class DashboardTests(unittest.TestCase):
+    @staticmethod
+    def _stop_dashboard(thread, server) -> None:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
     def test_dashboard_serves_html_and_api(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "state.db")
@@ -126,7 +132,7 @@ class DashboardTests(unittest.TestCase):
 
                 conn.close()
             finally:
-                server.shutdown()
+                self._stop_dashboard(thread, server)
 
     def test_api_tasks_includes_result_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -172,7 +178,7 @@ class DashboardTests(unittest.TestCase):
 
                 conn.close()
             finally:
-                server.shutdown()
+                self._stop_dashboard(thread, server)
 
     def test_dashboard_html_contains_modal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -207,7 +213,7 @@ class DashboardTests(unittest.TestCase):
 
                 conn.close()
             finally:
-                server.shutdown()
+                self._stop_dashboard(thread, server)
 
 
     def test_api_memories_returns_counts(self) -> None:
@@ -248,7 +254,7 @@ class DashboardTests(unittest.TestCase):
 
                 conn.close()
             finally:
-                server.shutdown()
+                self._stop_dashboard(thread, server)
 
     def test_api_stats_includes_memory_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -287,7 +293,7 @@ class DashboardTests(unittest.TestCase):
 
                 conn.close()
             finally:
-                server.shutdown()
+                self._stop_dashboard(thread, server)
 
 
 if __name__ == "__main__":
