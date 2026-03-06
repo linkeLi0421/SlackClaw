@@ -4,7 +4,9 @@ import json
 import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 from .config import AppConfig
 from .state_store import StateStore
@@ -56,6 +58,7 @@ def _make_handler(ctx: DashboardContext) -> type:
                 "/api/config": self._handle_api_config,
                 "/api/memories": self._handle_api_memories,
                 "/api/thread-contexts": self._handle_api_thread_contexts,
+                "/api/memory-file": self._handle_api_memory_file,
             }
             route = routes.get(path)
             if route:
@@ -142,6 +145,7 @@ def _make_handler(ctx: DashboardContext) -> type:
                         "scope_key": m.scope_key,
                         "category": m.category.value,
                         "content": m.content,
+                        "file_path": m.file_path,
                         "source_agent": m.source_agent,
                         "access_count": m.access_count,
                         "created_at": m.created_at,
@@ -164,6 +168,36 @@ def _make_handler(ctx: DashboardContext) -> type:
             finally:
                 store.close()
             _json_response(self, contexts)
+
+        def _handle_api_memory_file(self) -> None:
+            parsed = urlparse(self.path)
+            params = parse_qs(parsed.query)
+            memory_id = (params.get("id") or [""])[0].strip()
+            if not memory_id:
+                _json_response(self, {"error": "missing id parameter"}, status=400)
+                return
+            store = self._open_store()
+            try:
+                record = store.get_memory(memory_id)
+            finally:
+                store.close()
+            if record is None:
+                _json_response(self, {"error": "memory not found"}, status=404)
+                return
+            file_content = ""
+            fp = Path(record.file_path)
+            if fp.is_file():
+                try:
+                    file_content = fp.read_text(encoding="utf-8")
+                except Exception:
+                    file_content = "(unable to read file)"
+            else:
+                file_content = "(file not found on disk)"
+            _json_response(self, {
+                "memory_id": record.memory_id,
+                "file_path": record.file_path,
+                "file_content": file_content,
+            })
 
         def _handle_api_stats(self) -> None:
             store = self._open_store()
@@ -369,7 +403,7 @@ def _dashboard_html() -> str:
       word-break: break-all; color: var(--text-secondary);
     }
     tr:hover td { background: var(--accent-dim); color: var(--text-primary); }
-    tr.task-row, tr.thread-ctx-row { cursor: pointer; }
+    tr.task-row, tr.thread-ctx-row, tr.memory-row { cursor: pointer; }
 
     .badge {
       display: inline-block; padding: 2px 8px;
@@ -695,6 +729,25 @@ def _dashboard_html() -> str:
       overlay.classList.add('active');
     });
 
+    document.getElementById('memories-table').addEventListener('click', function(e){
+      var row = e.target.closest('.memory-row');
+      if (!row || !row.dataset.memid) return;
+      var memId = row.dataset.memid;
+      var overlay = document.getElementById('task-modal');
+      var title = document.getElementById('modal-title');
+      var body = document.getElementById('modal-body');
+      title.textContent = 'Memory: ' + memId;
+      body.innerHTML = '<p class="empty">Loading...</p>';
+      overlay.classList.add('active');
+      fetchJson('/api/memory-file?id=' + encodeURIComponent(memId)).then(function(data){
+        if (!data) { body.innerHTML = '<p class="empty">Failed to load</p>'; return; }
+        if (data.error) { body.innerHTML = '<p class="empty">' + esc(data.error) + '</p>'; return; }
+        var html = '<div style="margin-bottom:12px;font-size:11px;color:var(--text-muted);word-break:break-all;">' + esc(data.file_path) + '</div>';
+        html += '<pre style="background:var(--bg-input);padding:14px 16px;border:1px solid var(--border);border-radius:6px;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);">' + esc(data.file_content) + '</pre>';
+        body.innerHTML = html;
+      });
+    });
+
     async function fetchJson(url) {
       try { var r = await fetch(url); return await r.json(); }
       catch(e) { return null; }
@@ -804,7 +857,8 @@ def _dashboard_html() -> str:
 
         var recs = memories.records || [];
         var mRows = recs.map(function(m){
-          return '<tr><td>'+esc(trunc(m.memory_id,12))+'</td><td><span class="badge badge-'+(m.scope==='workspace'?'succeeded':m.scope==='user'?'running':'pending')+'">'+esc(m.scope)+'</span></td>'
+          return '<tr class="memory-row" data-memid="'+esc(m.memory_id)+'">'
+            +'<td>'+esc(trunc(m.memory_id,12))+'</td><td><span class="badge badge-'+(m.scope==='workspace'?'succeeded':m.scope==='user'?'running':'pending')+'">'+esc(m.scope)+'</span></td>'
             +'<td>'+esc(m.scope_key)+'</td><td>'+esc(m.category)+'</td>'
             +'<td>'+esc(trunc(m.content,80))+'</td><td>'+esc(m.source_agent||'-')+'</td>'
             +'<td>'+m.access_count+'</td><td>'+localTime(m.updated_at)+'</td></tr>';
