@@ -455,6 +455,20 @@ def _dashboard_html() -> str:
       border: 1px solid var(--border); border-radius: 4px; color: var(--text-secondary);
     }
     .chat-placeholder { color: var(--text-muted); font-style: italic; }
+
+    .pager {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0; font-size: 11px; color: var(--text-muted);
+    }
+    .pager-btns { display: flex; gap: 4px; }
+    .pager-btn {
+      background: var(--bg-input); border: 1px solid var(--border);
+      color: var(--text-secondary); padding: 3px 10px; cursor: pointer;
+      font-family: var(--font-mono); font-size: 11px; border-radius: 3px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .pager-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .pager-btn:disabled { opacity: 0.35; cursor: default; border-color: var(--border); color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -551,6 +565,29 @@ def _dashboard_html() -> str:
       h += rows.join('');
       h += '</tbody></table>';
       return h;
+    }
+
+    var PAGE_SIZE = 10;
+    var _pages = {};
+    function pageFor(key) { return _pages[key] || 0; }
+    function setPage(key, p) { _pages[key] = p; refresh(); }
+    function makePagedTable(key, headers, rows, containerId) {
+      var el = document.getElementById(containerId);
+      if (!rows || rows.length === 0) { el.innerHTML = '<p class="empty">No data</p>'; return; }
+      var total = rows.length;
+      var maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
+      var page = Math.min(pageFor(key), maxPage);
+      _pages[key] = page;
+      var start = page * PAGE_SIZE;
+      var slice = rows.slice(start, start + PAGE_SIZE);
+      var html = makeTable(headers, slice);
+      html += '<div class="pager">';
+      html += '<span>' + (start+1) + '-' + Math.min(start+PAGE_SIZE, total) + ' of ' + total + '</span>';
+      html += '<div class="pager-btns">';
+      html += '<button class="pager-btn" onclick="setPage(\\'' + key + '\\',' + (page-1) + ')"' + (page===0?' disabled':'') + '>&laquo; Prev</button>';
+      html += '<button class="pager-btn" onclick="setPage(\\'' + key + '\\',' + (page+1) + ')"' + (page>=maxPage?' disabled':'') + '>Next &raquo;</button>';
+      html += '</div></div>';
+      el.innerHTML = html;
     }
 
     function openTaskModal(taskId) {
@@ -720,32 +757,29 @@ def _dashboard_html() -> str:
 
       if (tasks) {
         _taskCache = tasks;
-        var tt = document.getElementById('tasks-table');
         var tRows = tasks.map(function(t){
           return '<tr class="task-row" data-taskid="'+esc(t.task_id)+'">'
             +'<td>'+esc(trunc(t.task_id,12))+'</td><td>'+badge(t.status)+'</td><td>'+esc(trunc(t.command_text,50))+'</td>'
             +'<td>'+esc(t.trigger_user)+'</td><td>'+esc(t.channel_id)+'</td>'
             +'<td>'+localTime(t.created_at)+'</td><td>'+localTime(t.updated_at)+'</td></tr>';
         });
-        tt.innerHTML = makeTable(['Task ID','Status','Command','User','Channel','Created','Updated'], tRows);
+        makePagedTable('tasks', ['Task ID','Status','Command','User','Channel','Created','Updated'], tRows, 'tasks-table');
       }
 
       if (sessions) {
-        var st = document.getElementById('sessions-table');
         var sRows = sessions.map(function(s){
           return '<tr><td>'+esc(s.channel_id)+'</td><td>'+esc(s.thread_ts)+'</td><td>'+esc(s.agent)+'</td>'
             +'<td>'+esc(trunc(s.session_id,20))+'</td><td>'+localTime(s.updated_at)+'</td></tr>';
         });
-        st.innerHTML = makeTable(['Channel','Thread','Agent','Session ID','Updated'], sRows);
+        makePagedTable('sessions', ['Channel','Thread','Agent','Session ID','Updated'], sRows, 'sessions-table');
       }
 
       if (approvals) {
-        var at = document.getElementById('approvals-table');
         var aRows = approvals.map(function(a){
           return '<tr><td>'+esc(a.task_id)+'</td><td>'+badge(a.status)+'</td><td>'+esc(a.decided_by || '-')+'</td>'
             +'<td>'+esc(a.decision_reaction || '-')+'</td><td>'+localTime(a.created_at)+'</td></tr>';
         });
-        at.innerHTML = makeTable(['Task ID','Status','Decided By','Reaction','Created'], aRows);
+        makePagedTable('approvals', ['Task ID','Status','Decided By','Reaction','Created'], aRows, 'approvals-table');
       }
 
       if (locks) {
@@ -768,7 +802,6 @@ def _dashboard_html() -> str:
         if (memories.total_memories === 0) mHtml = '<p class="empty">No memories stored</p>';
         mi.innerHTML = mHtml;
 
-        var mt = document.getElementById('memories-table');
         var recs = memories.records || [];
         var mRows = recs.map(function(m){
           return '<tr><td>'+esc(trunc(m.memory_id,12))+'</td><td><span class="badge badge-'+(m.scope==='workspace'?'succeeded':m.scope==='user'?'running':'pending')+'">'+esc(m.scope)+'</span></td>'
@@ -776,20 +809,18 @@ def _dashboard_html() -> str:
             +'<td>'+esc(trunc(m.content,80))+'</td><td>'+esc(m.source_agent||'-')+'</td>'
             +'<td>'+m.access_count+'</td><td>'+localTime(m.updated_at)+'</td></tr>';
         });
-        mt.innerHTML = makeTable(['ID','Scope','Scope Key','Category','Content','Agent','Hits','Updated'], mRows);
+        makePagedTable('memories', ['ID','Scope','Scope Key','Category','Content','Agent','Hits','Updated'], mRows, 'memories-table');
       }
 
       if (threadCtxs) {
         _threadCtxCache = threadCtxs;
-        var tct = document.getElementById('thread-ctx-table');
         var tcRows = threadCtxs.map(function(tc){
-          var lines = (tc.context || '').split('\\n');
           var preview = tc.context.length > 120 ? tc.context.substring(0,120) + '...' : tc.context;
           return '<tr class="thread-ctx-row" data-channel="'+esc(tc.channel_id)+'" data-thread="'+esc(tc.thread_ts)+'">'
             +'<td>'+esc(tc.channel_id)+'</td><td>'+esc(tc.thread_ts)+'</td>'
             +'<td>'+esc(preview)+'</td><td>'+localTime(tc.updated_at)+'</td></tr>';
         });
-        tct.innerHTML = makeTable(['Channel','Thread','Context (preview)','Updated'], tcRows);
+        makePagedTable('threadctx', ['Channel','Thread','Context (preview)','Updated'], tcRows, 'thread-ctx-table');
       }
     }
 
