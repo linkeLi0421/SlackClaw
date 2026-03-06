@@ -55,6 +55,7 @@ def _make_handler(ctx: DashboardContext) -> type:
                 "/api/stats": self._handle_api_stats,
                 "/api/config": self._handle_api_config,
                 "/api/memories": self._handle_api_memories,
+                "/api/thread-contexts": self._handle_api_thread_contexts,
             }
             route = routes.get(path)
             if route:
@@ -133,12 +134,36 @@ def _make_handler(ctx: DashboardContext) -> type:
             try:
                 scope_counts = store.count_memories_by_scope()
                 total = store.count_memories_total()
+                records = store.list_all_memories(limit=200)
+                data = [
+                    {
+                        "memory_id": m.memory_id,
+                        "scope": m.scope.value,
+                        "scope_key": m.scope_key,
+                        "category": m.category.value,
+                        "content": m.content,
+                        "source_agent": m.source_agent,
+                        "access_count": m.access_count,
+                        "created_at": m.created_at,
+                        "updated_at": m.updated_at,
+                    }
+                    for m in records
+                ]
             finally:
                 store.close()
             _json_response(self, {
                 "total_memories": total,
                 "memories_by_scope": scope_counts,
+                "records": data,
             })
+
+        def _handle_api_thread_contexts(self) -> None:
+            store = self._open_store()
+            try:
+                contexts = store.list_thread_contexts(limit=100)
+            finally:
+                store.close()
+            _json_response(self, contexts)
 
         def _handle_api_stats(self) -> None:
             store = self._open_store()
@@ -344,7 +369,7 @@ def _dashboard_html() -> str:
       word-break: break-all; color: var(--text-secondary);
     }
     tr:hover td { background: var(--accent-dim); color: var(--text-primary); }
-    tr.task-row { cursor: pointer; }
+    tr.task-row, tr.thread-ctx-row { cursor: pointer; }
 
     .badge {
       display: inline-block; padding: 2px 8px;
@@ -467,8 +492,14 @@ def _dashboard_html() -> str:
     </div>
 
     <div class="card">
+      <h2>Thread Contexts</h2>
+      <div class="table-wrap" id="thread-ctx-table"></div>
+    </div>
+
+    <div class="card">
       <h2>Memories</h2>
       <div id="memories-info"></div>
+      <div class="table-wrap" id="memories-table" style="margin-top:12px;"></div>
     </div>
 
     <div class="card">
@@ -593,6 +624,40 @@ def _dashboard_html() -> str:
       if (row && row.dataset.taskid) openTaskModal(row.dataset.taskid);
     });
 
+    var _threadCtxCache = [];
+    document.getElementById('thread-ctx-table').addEventListener('click', function(e){
+      var row = e.target.closest('.thread-ctx-row');
+      if (!row) return;
+      var ch = row.dataset.channel, ts = row.dataset.thread;
+      var tc = _threadCtxCache.find(function(t){ return t.channel_id === ch && t.thread_ts === ts; });
+      if (!tc) return;
+      var overlay = document.getElementById('task-modal');
+      document.getElementById('modal-title').textContent = 'Thread Context: ' + ch + ' / ' + ts;
+      var entries = tc.context.split('\\n\\n');
+      var html = '<div style="display:flex;flex-direction:column;">';
+      entries.forEach(function(entry) {
+        if (!entry.trim()) return;
+        var agentMatch = entry.match(/^agent=(.+)/m);
+        var userMatch = entry.match(/^user=(.+)/m);
+        var assistantMatch = entry.match(/^assistant=([\\s\\S]*)/m);
+        var agent = agentMatch ? agentMatch[1] : '?';
+        var userMsg = userMatch ? userMatch[1] : '';
+        var assistantMsg = assistantMatch ? assistantMatch[1] : '';
+        if (userMsg) {
+          html += '<div class="chat-row row-user"><img class="chat-avatar" src="' + AVATAR_USER + '" alt="User"><div class="chat-bubble chat-user">' + esc(userMsg) + '</div></div>';
+        }
+        if (assistantMsg) {
+          html += '<div class="chat-row row-system"><img class="chat-avatar" src="' + AVATAR_BOT + '" alt="Bot">';
+          html += '<div class="chat-bubble chat-system"><div class="chat-label">' + esc(agent) + '</div>';
+          html += '<pre>' + esc(assistantMsg.length > 2000 ? assistantMsg.substring(0,2000) + '...' : assistantMsg) + '</pre></div></div>';
+        }
+        html += '<hr style="border:none;border-top:1px dashed var(--border);margin:8px 0;">';
+      });
+      html += '</div>';
+      document.getElementById('modal-body').innerHTML = html;
+      overlay.classList.add('active');
+    });
+
     async function fetchJson(url) {
       try { var r = await fetch(url); return await r.json(); }
       catch(e) { return null; }
@@ -607,10 +672,11 @@ def _dashboard_html() -> str:
         fetchJson('/api/approvals'),
         fetchJson('/api/locks'),
         fetchJson('/api/memories'),
+        fetchJson('/api/thread-contexts'),
       ]);
       var stats = results[0], config = results[1], tasks = results[2];
       var sessions = results[3], approvals = results[4], locks = results[5];
-      var memories = results[6];
+      var memories = results[6], threadCtxs = results[7];
 
       document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
 
@@ -701,6 +767,29 @@ def _dashboard_html() -> str:
         mHtml += '</div>';
         if (memories.total_memories === 0) mHtml = '<p class="empty">No memories stored</p>';
         mi.innerHTML = mHtml;
+
+        var mt = document.getElementById('memories-table');
+        var recs = memories.records || [];
+        var mRows = recs.map(function(m){
+          return '<tr><td>'+esc(trunc(m.memory_id,12))+'</td><td><span class="badge badge-'+(m.scope==='workspace'?'succeeded':m.scope==='user'?'running':'pending')+'">'+esc(m.scope)+'</span></td>'
+            +'<td>'+esc(m.scope_key)+'</td><td>'+esc(m.category)+'</td>'
+            +'<td>'+esc(trunc(m.content,80))+'</td><td>'+esc(m.source_agent||'-')+'</td>'
+            +'<td>'+m.access_count+'</td><td>'+localTime(m.updated_at)+'</td></tr>';
+        });
+        mt.innerHTML = makeTable(['ID','Scope','Scope Key','Category','Content','Agent','Hits','Updated'], mRows);
+      }
+
+      if (threadCtxs) {
+        _threadCtxCache = threadCtxs;
+        var tct = document.getElementById('thread-ctx-table');
+        var tcRows = threadCtxs.map(function(tc){
+          var lines = (tc.context || '').split('\\n');
+          var preview = tc.context.length > 120 ? tc.context.substring(0,120) + '...' : tc.context;
+          return '<tr class="thread-ctx-row" data-channel="'+esc(tc.channel_id)+'" data-thread="'+esc(tc.thread_ts)+'">'
+            +'<td>'+esc(tc.channel_id)+'</td><td>'+esc(tc.thread_ts)+'</td>'
+            +'<td>'+esc(preview)+'</td><td>'+localTime(tc.updated_at)+'</td></tr>';
+        });
+        tct.innerHTML = makeTable(['Channel','Thread','Context (preview)','Updated'], tcRows);
       }
     }
 

@@ -739,6 +739,28 @@ class StateStore:
         row = self._conn.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()
         return int(row["cnt"]) if row else 0
 
+    def list_all_memories(self, *, limit: int = 200) -> list[MemoryRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM memories ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [self._memory_record_from_row(r) for r in rows]
+
+    def list_thread_contexts(self, *, limit: int = 100) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT channel_id, thread_ts, context, updated_at FROM thread_context ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "channel_id": str(r["channel_id"]),
+                "thread_ts": str(r["thread_ts"]),
+                "context": str(r["context"]),
+                "updated_at": str(r["updated_at"]),
+            }
+            for r in rows
+        ]
+
     @staticmethod
     def _memory_record_from_row(row: sqlite3.Row) -> MemoryRecord:
         return MemoryRecord(
