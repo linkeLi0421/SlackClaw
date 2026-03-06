@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
+import tempfile
 from uuid import uuid4
 
 from .memory import (
@@ -52,56 +51,6 @@ _MEMORY_EXTRACTION_INSTRUCTION = (
     "[MEMORY]: Deploy process: git tag vX.Y.Z then push to trigger CI\n"
     "Only tag genuinely durable facts — skip transient details or things already in memory."
 )
-
-_MEMORY_SECTION_START = "\n\n<!-- SlackClaw Memory Context (auto-injected, do not edit) -->\n"
-_MEMORY_SECTION_END = "\n<!-- End SlackClaw Memory Context -->\n"
-
-
-@contextlib.contextmanager
-def _inject_memory_into_instructions(cwd: str, system_ctx: str, *, agent: str):
-    """Temporarily append memory context to CLAUDE.md / AGENTS.md in the cwd.
-
-    On exit, the original file content is restored (or the file is removed
-    if it was created by this function).
-    """
-    if not system_ctx or not cwd:
-        yield
-        return
-
-    # Map agent -> instruction file it reads
-    filenames: list[str] = []
-    if agent == "claude":
-        filenames = ["CLAUDE.md"]
-    elif agent == "codex":
-        filenames = ["AGENTS.md", "CODEX.md"]
-    else:
-        yield
-        return
-
-    originals: dict[str, str | None] = {}  # path -> original content (None = didn't exist)
-    section = f"{_MEMORY_SECTION_START}{system_ctx}{_MEMORY_SECTION_END}"
-
-    try:
-        for name in filenames:
-            filepath = os.path.join(cwd, name)
-            if os.path.isfile(filepath):
-                originals[filepath] = Path(filepath).read_text(encoding="utf-8")
-                with open(filepath, "a", encoding="utf-8") as f:
-                    f.write(section)
-            else:
-                originals[filepath] = None
-                Path(filepath).write_text(section.lstrip(), encoding="utf-8")
-        yield
-    finally:
-        for filepath, original in originals.items():
-            try:
-                if original is None:
-                    os.remove(filepath)
-                else:
-                    Path(filepath).write_text(original, encoding="utf-8")
-            except Exception:
-                pass
-
 
 class TaskExecutor:
     def __init__(
@@ -369,9 +318,19 @@ class TaskExecutor:
                 "Attached file paths on local disk:\n"
                 f"{attachment_list}"
             )
+        # When system context is present, combine it with the user prompt and
+        # pipe via stdin (using "-" placeholder) to avoid CLI argument parsing
+        # issues with long multiline content.
+        stdin_text: str | None = None
+        if system_ctx:
+            combined = f"{system_ctx}\n\n{user_prompt}"
+            stdin_text = combined
+            prompt_arg = "-"
+        else:
+            prompt_arg = user_prompt
+
         run_cwd = self._run_cwd()
         codex_cwd = run_cwd or os.getcwd()
-        instruction_cwd = run_cwd or os.getcwd()
         codex_bin = _resolve_cli("codex")
         if existing_session_id:
             cmd = [
@@ -385,7 +344,7 @@ class TaskExecutor:
                     "--skip-git-repo-check",
                     "--json",
                     existing_session_id,
-                    user_prompt,
+                    prompt_arg,
                 ]
             )
         else:
@@ -398,35 +357,34 @@ class TaskExecutor:
                 [
                     "--skip-git-repo-check",
                     "--json",
-                    user_prompt,
+                    prompt_arg,
                 ]
             )
-
-        with _inject_memory_into_instructions(instruction_cwd, system_ctx, agent="codex"):
-            try:
-                completed = subprocess.run(
-                    cmd,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    capture_output=True,
-                    timeout=self._timeout_seconds,
-                    check=False,
-                    cwd=run_cwd,
-                    env=self._agent_env(),
-                )
-            except subprocess.TimeoutExpired:
-                return TaskExecutionResult(
-                    status=TaskStatus.FAILED,
-                    summary=f"codex command timed out after {self._timeout_seconds}s",
-                    details=user_prompt,
-                )
-            except Exception as exc:  # pragma: no cover - OS-level failures
-                return TaskExecutionResult(
-                    status=TaskStatus.FAILED,
-                    summary=f"codex execution failed: {exc}",
-                    details=user_prompt,
-                )
+        try:
+            completed = subprocess.run(
+                cmd,
+                input=stdin_text,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=self._timeout_seconds,
+                check=False,
+                cwd=run_cwd,
+                env=self._agent_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"codex command timed out after {self._timeout_seconds}s",
+                details=user_prompt,
+            )
+        except Exception as exc:  # pragma: no cover - OS-level failures
+            return TaskExecutionResult(
+                status=TaskStatus.FAILED,
+                summary=f"codex execution failed: {exc}",
+                details=user_prompt,
+            )
 
         events = self._parse_json_events(completed.stdout or "")
         session_id = self._extract_codex_session_id(events) or existing_session_id
@@ -462,7 +420,6 @@ class TaskExecutor:
                 f"{attachment_list}"
             )
         run_cwd = self._run_cwd()
-        instruction_cwd = run_cwd or os.getcwd()
         cmd = [_resolve_cli("claude")]
         if self._claude_permission_mode:
             cmd.extend(["--permission-mode", self._claude_permission_mode])
@@ -475,9 +432,23 @@ class TaskExecutor:
                 if parent and parent not in seen_dirs:
                     seen_dirs.add(parent)
                     cmd.extend(["--add-dir", parent])
-        cmd.extend(["-p", user_prompt])
 
-        with _inject_memory_into_instructions(instruction_cwd, system_ctx, agent="claude"):
+        # Write system context to a temp file and inject via
+        # --append-system-prompt so it is treated as a system-level
+        # instruction rather than part of the user prompt.
+        sys_prompt_file: str | None = None
+        try:
+            if system_ctx:
+                fd, sys_prompt_file = tempfile.mkstemp(
+                    suffix=".md", prefix="slackclaw_ctx_",
+                )
+                os.write(fd, system_ctx.encode("utf-8"))
+                os.close(fd)
+                with open(sys_prompt_file, encoding="utf-8") as f:
+                    sys_prompt_content = f.read()
+                cmd.extend(["--append-system-prompt", sys_prompt_content])
+            cmd.extend(["-p", user_prompt])
+
             try:
                 completed = subprocess.run(
                     cmd,
@@ -502,6 +473,12 @@ class TaskExecutor:
                     summary=f"claude execution failed: {exc}",
                     details=user_prompt,
                 )
+        finally:
+            if sys_prompt_file:
+                try:
+                    os.unlink(sys_prompt_file)
+                except Exception:
+                    pass
 
         stdout = (completed.stdout or "").strip()
         stderr = (completed.stderr or "").strip()

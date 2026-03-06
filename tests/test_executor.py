@@ -336,27 +336,22 @@ class ExecutorTests(unittest.TestCase):
             executor = TaskExecutor(
                 dry_run=False, timeout_seconds=30,
                 memory_enabled=True, memory_dir=mem_dir,
-                agent_workdir=tmpdir,
             )
-            claude_md = Path(tmpdir) / "CLAUDE.md"
-            claude_md.write_text("# Test\n", encoding="utf-8")
-            injected_content = None
-
-            original_run = subprocess.run
-            def capture_run(*args, **kwargs):
-                nonlocal injected_content
-                injected_content = claude_md.read_text(encoding="utf-8")
-                return CompletedProcess(args=["claude"], returncode=0, stdout="done\n", stderr="")
-
-            with patch("slackclaw.executor.subprocess.run", side_effect=capture_run):
+            with patch("slackclaw.executor.subprocess.run") as mock_run:
+                mock_run.return_value = CompletedProcess(
+                    args=["claude"], returncode=0, stdout="done\n", stderr="",
+                )
                 executor.execute(_task("claude:explain the deployment process"), store=store)
 
-            # Memory context was injected into CLAUDE.md during execution
-            self.assertIsNotNone(injected_content)
-            self.assertIn("Relevant memories:", injected_content)
-            self.assertIn("Docker", injected_content)
-            # CLAUDE.md is restored after execution
-            self.assertEqual(claude_md.read_text(encoding="utf-8"), "# Test\n")
+            # For Claude, memory context is injected via --append-system-prompt
+            cmd_args = mock_run.call_args.args[0]
+            self.assertIn("--append-system-prompt", cmd_args)
+            sys_idx = cmd_args.index("--append-system-prompt")
+            sys_prompt = cmd_args[sys_idx + 1]
+            self.assertIn("Relevant memories:", sys_prompt)
+            self.assertIn("Docker", sys_prompt)
+            # User prompt is passed via -p as a separate positional arg
+            self.assertIn("-p", cmd_args)
             store.close()
 
     def test_auto_extract_memories_from_agent_output(self) -> None:
@@ -399,26 +394,22 @@ class ExecutorTests(unittest.TestCase):
                 dry_run=False,
                 timeout_seconds=30,
                 memory_enabled=True,
-                agent_workdir=tmpdir,
             )
-            claude_md = Path(tmpdir) / "CLAUDE.md"
-            claude_md.write_text("# Test\n", encoding="utf-8")
-            injected_content = None
-
-            def capture_run(*args, **kwargs):
-                nonlocal injected_content
-                injected_content = claude_md.read_text(encoding="utf-8")
-                return CompletedProcess(args=["claude"], returncode=0, stdout="ok\n", stderr="")
-
-            with patch("slackclaw.executor.subprocess.run", side_effect=capture_run):
+            with patch("slackclaw.executor.subprocess.run") as mock_run:
+                mock_run.return_value = CompletedProcess(
+                    args=["claude"], returncode=0, stdout="ok\n", stderr="",
+                )
                 executor.execute(_task("claude:who are you"), store=store)
 
-            # Profile hints are injected into CLAUDE.md during execution
-            self.assertIsNotNone(injected_content)
-            self.assertIn("Assistant profile:", injected_content)
-            self.assertIn("Preferred assistant name: xiaoli", injected_content)
-            self.assertIn("Preferred tone: encouraging and positive", injected_content)
-            self.assertIn("Identity response rule:", injected_content)
+            # Profile hints are in --append-system-prompt
+            cmd_args = mock_run.call_args.args[0]
+            self.assertIn("--append-system-prompt", cmd_args)
+            sys_idx = cmd_args.index("--append-system-prompt")
+            sys_prompt = cmd_args[sys_idx + 1]
+            self.assertIn("Assistant profile:", sys_prompt)
+            self.assertIn("Preferred assistant name: xiaoli", sys_prompt)
+            self.assertIn("Preferred tone: encouraging and positive", sys_prompt)
+            self.assertIn("Identity response rule:", sys_prompt)
             store.close()
 
     def test_identity_query_uses_user_only_thread_context(self) -> None:
@@ -441,28 +432,21 @@ class ExecutorTests(unittest.TestCase):
                 dry_run=False,
                 timeout_seconds=30,
                 memory_enabled=True,
-                agent_workdir=tmpdir,
             )
-            agents_md = Path(tmpdir) / "AGENTS.md"
-            agents_md.write_text("# Test\n", encoding="utf-8")
-            injected_content = None
-
-            def capture_run(*args, **kwargs):
-                nonlocal injected_content
-                injected_content = agents_md.read_text(encoding="utf-8")
-                return CompletedProcess(args=["codex"], returncode=0, stdout="ok\n", stderr="")
-
-            with patch("slackclaw.executor.subprocess.run", side_effect=capture_run):
+            with patch("slackclaw.executor.subprocess.run") as mock_run:
+                mock_run.return_value = CompletedProcess(
+                    args=["codex"], returncode=0, stdout="ok\n", stderr="",
+                )
                 executor.execute(_task("codex:who are you"), store=store)
 
-            # Thread context is injected into AGENTS.md during execution
-            self.assertIsNotNone(injected_content)
-            self.assertIn("Shared thread context from previous user messages:", injected_content)
-            self.assertIn("- who are you", injected_content)
-            self.assertIn("- your name is xiaoli, you always answer with encouraging words", injected_content)
-            self.assertNotIn("Please paste the hints after Conversation profile hints", injected_content)
-            # AGENTS.md is restored after execution
-            self.assertEqual(agents_md.read_text(encoding="utf-8"), "# Test\n")
+            # For Codex, system context is piped via stdin (prompt arg = "-")
+            cmd_args = mock_run.call_args.args[0]
+            self.assertIn("-", cmd_args)
+            stdin_text = mock_run.call_args.kwargs.get("input", "")
+            self.assertIn("Shared thread context from previous user messages:", stdin_text)
+            self.assertIn("- who are you", stdin_text)
+            self.assertIn("- your name is xiaoli, you always answer with encouraging words", stdin_text)
+            self.assertNotIn("Please paste the hints after Conversation profile hints", stdin_text)
             store.close()
 
 
